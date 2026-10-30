@@ -40,4 +40,5 @@ class Settings(BaseSettings):
     nightly_cron: str = "0 3 * * *"
     # Gitea signs its webhook with this (HMAC-SHA256); unset = pings aren't checked (in-cluster only until wired).
     webhook_secret: SecretStr | None = None
-    port: int = 8080
+    # Not `port`: Kubernetes puts SHIKIGAMI_PORT=tcp://... (a service link for the Service named shikigami) in the env.
+    http_port: int = 8080
