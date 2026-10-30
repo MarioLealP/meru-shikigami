@@ -8,6 +8,8 @@ image:
   digest: sha256:7160987b333db47082cd06ebf9319798e08182d5244fb87de92846556024d424
   tag: "b6f9efe8f6ce"
 port: 8080
+# Fixed, so Gitea (outside the cluster) can send Meru/requests' webhook to http://10.43.0.60/ping.
+clusterIP: 10.43.0.60
 heartbeat:
   readyPath: /ready # Temporal answers over mTLS
 # Its two logins (D63), from OpenBao apps/meru/shikigami/eso/{authentik,gitea} through ESO (D66): Authentik's service
