@@ -42,6 +42,11 @@ to one of them - and KEDA adds replicas when tasks queue up.
   update, retire), side by side. A nightly schedule runs it too, to catch a missed ping.
 - `GET /backlog` - tasks waiting on Shikigami's queue, `{"backlog": n}`; KEDA scales on it.
 - `GET /heartbeat`, `GET /ready` - alive; connected to Temporal.
+- `onboard-build-<app>` (`OnboardBuild`) - an app's build credentials: its signing key pair and Zot push login
+  (`apps/meru/<app>-build/build`, what Sindri build jobs read), its line in Zot's htpasswd, and its runner token.
+  What exists is kept; every OpenBao write is check-and-set. Returns the public key.
+  `shikigami-bootstrap <app>` runs it once with an admin session's authority, on its own queue - how Shikigami made
+  its own (clockmost-infra `projects/openbao/admin/meru-shikigami-bootstrap.sh`).
 
 Temporal is reached with the pod's in-cluster certificate (mTLS) plus a 10-minute Authentik token that is swapped
 before it runs out. Settings are `SHIKIGAMI_*` environment variables (`src/shikigami/config.py`).
