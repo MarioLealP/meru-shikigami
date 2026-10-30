@@ -28,9 +28,10 @@ certificate:
 # More workers while app steps queue up (D75): KEDA polls /backlog, one replica per 5 waiting tasks, 1 to 4.
 autoscaling:
   enabled: true
+# Size medium (its request in Meru/requests): ~85 MiB before any work.
 resources:
   requests:
-    cpu: 20m
-    memory: 128Mi
+    cpu: 200m
+    memory: 256Mi
   limits:
-    memory: 384Mi
+    memory: 1Gi
