@@ -1,0 +1,131 @@
+{
+  "$defs": {
+    "DatabaseSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "owner": {
+          "pattern": "^[a-z0-9]([-a-z0-9_.]{0,61}[a-z0-9])?$",
+          "title": "Owner",
+          "type": "string"
+        },
+        "engine": {
+          "const": "postgres",
+          "default": "postgres",
+          "title": "Engine",
+          "type": "string"
+        },
+        "size": {
+          "default": "small",
+          "enum": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "title": "Size",
+          "type": "string"
+        },
+        "storage": {
+          "$ref": "#/$defs/DatabaseStorage"
+        },
+        "app": {
+          "description": "The one app that gets the credentials: no shared databases.",
+          "pattern": "^[a-z]([-a-z0-9]{0,28}[a-z0-9])?$",
+          "title": "App",
+          "type": "string"
+        },
+        "retention": {
+          "default": "30d",
+          "pattern": "^[1-9][0-9]{0,3}d$",
+          "title": "Retention",
+          "type": "string"
+        }
+      },
+      "required": [
+        "owner",
+        "storage",
+        "app"
+      ],
+      "title": "DatabaseSpec",
+      "type": "object"
+    },
+    "DatabaseStorage": {
+      "additionalProperties": false,
+      "properties": {
+        "size": {
+          "pattern": "^[1-9][0-9]{0,4}(Mi|Gi)$",
+          "title": "Size",
+          "type": "string"
+        },
+        "class": {
+          "enum": [
+            "ssd",
+            "hdd"
+          ],
+          "title": "Class",
+          "type": "string"
+        }
+      },
+      "required": [
+        "size",
+        "class"
+      ],
+      "title": "DatabaseStorage",
+      "type": "object"
+    },
+    "Metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "pattern": "^[a-z]([-a-z0-9]{0,28}[a-z0-9])?$",
+          "title": "Name",
+          "type": "string"
+        },
+        "approvedBy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Written by Shikigami's bot after an atlas approval.",
+          "title": "Approvedby"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "Metadata",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "meru.clockmost.com/v1",
+      "title": "Apiversion",
+      "type": "string"
+    },
+    "kind": {
+      "const": "Database",
+      "title": "Kind",
+      "type": "string"
+    },
+    "metadata": {
+      "$ref": "#/$defs/Metadata"
+    },
+    "spec": {
+      "$ref": "#/$defs/DatabaseSpec"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "title": "Database",
+  "type": "object"
+}

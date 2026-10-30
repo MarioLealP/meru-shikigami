@@ -1,0 +1,289 @@
+{
+  "$defs": {
+    "AppSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "owner": {
+          "pattern": "^[a-z0-9]([-a-z0-9_.]{0,61}[a-z0-9])?$",
+          "title": "Owner",
+          "type": "string"
+        },
+        "description": {
+          "maxLength": 120,
+          "minLength": 3,
+          "pattern": "^[^\\n]*$",
+          "title": "Description",
+          "type": "string"
+        },
+        "template": {
+          "default": "nuwa/python",
+          "description": "nuwa/<name>; nuwa/upstream needs image; a git URL only seeds the repo (approval).",
+          "pattern": "^(nuwa/[a-z][-a-z0-9]*|https://\\S+)$",
+          "title": "Template",
+          "type": "string"
+        },
+        "image": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Someone else's image, for template nuwa/upstream.",
+          "title": "Image"
+        },
+        "size": {
+          "default": "small",
+          "enum": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "title": "Size",
+          "type": "string"
+        },
+        "route": {
+          "$ref": "#/$defs/Route",
+          "default": {
+            "host": null,
+            "auth": "authentik",
+            "access": [
+              "clockmost-admins"
+            ],
+            "enabled": true
+          }
+        },
+        "storage": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Volume"
+          },
+          "title": "Storage",
+          "type": "array"
+        },
+        "secrets": {
+          "default": [],
+          "description": "Names only; the values go to OpenBao, never here.",
+          "items": {
+            "pattern": "^[a-z]([-a-z0-9]{0,28}[a-z0-9])?$",
+            "type": "string"
+          },
+          "title": "Secrets",
+          "type": "array"
+        },
+        "replicas": {
+          "default": 1,
+          "maximum": 3,
+          "minimum": 1,
+          "title": "Replicas",
+          "type": "integer"
+        },
+        "port": {
+          "default": 8080,
+          "maximum": 65535,
+          "minimum": 1024,
+          "title": "Port",
+          "type": "integer"
+        },
+        "heartbeat": {
+          "default": "/heartbeat",
+          "pattern": "^/\\S*$",
+          "title": "Heartbeat",
+          "type": "string"
+        },
+        "exceptions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Exception_"
+          },
+          "title": "Exceptions",
+          "type": "array"
+        },
+        "retention": {
+          "default": "30d",
+          "pattern": "^[1-9][0-9]{0,3}d$",
+          "title": "Retention",
+          "type": "string"
+        }
+      },
+      "required": [
+        "owner",
+        "description"
+      ],
+      "title": "AppSpec",
+      "type": "object"
+    },
+    "Exception_": {
+      "additionalProperties": false,
+      "description": "A Kyverno exception for this app's pods. Always needs approval.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "runAsRoot",
+            "privileged",
+            "hostNetwork",
+            "hostPath"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 300,
+          "minLength": 10,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "reason"
+      ],
+      "title": "Exception_",
+      "type": "object"
+    },
+    "Metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "pattern": "^[a-z]([-a-z0-9]{0,28}[a-z0-9])?$",
+          "title": "Name",
+          "type": "string"
+        },
+        "approvedBy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Written by Shikigami's bot after an atlas approval.",
+          "title": "Approvedby"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "Metadata",
+      "type": "object"
+    },
+    "Route": {
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?\\.clockmost\\.com$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Default <name>.clockmost.com.",
+          "title": "Host"
+        },
+        "auth": {
+          "default": "authentik",
+          "description": "authentik = forward-auth at Caddy; oidc = the app logs in itself; none: approval.",
+          "enum": [
+            "authentik",
+            "oidc",
+            "none"
+          ],
+          "title": "Auth",
+          "type": "string"
+        },
+        "access": {
+          "default": [
+            "clockmost-admins"
+          ],
+          "description": "Groups; others: approval.",
+          "items": {
+            "pattern": "^[a-z0-9]([-a-z0-9_.]{0,61}[a-z0-9])?$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Access",
+          "type": "array"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "title": "Route",
+      "type": "object"
+    },
+    "Volume": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "pattern": "^[a-z]([-a-z0-9]{0,28}[a-z0-9])?$",
+          "title": "Name",
+          "type": "string"
+        },
+        "size": {
+          "pattern": "^[1-9][0-9]{0,4}(Mi|Gi)$",
+          "title": "Size",
+          "type": "string"
+        },
+        "class": {
+          "enum": [
+            "ssd",
+            "hdd"
+          ],
+          "title": "Class",
+          "type": "string"
+        },
+        "mountPath": {
+          "pattern": "^/\\S*$",
+          "title": "Mountpath",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "size",
+        "class",
+        "mountPath"
+      ],
+      "title": "Volume",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "meru.clockmost.com/v1",
+      "title": "Apiversion",
+      "type": "string"
+    },
+    "kind": {
+      "const": "App",
+      "title": "Kind",
+      "type": "string"
+    },
+    "metadata": {
+      "$ref": "#/$defs/Metadata"
+    },
+    "spec": {
+      "$ref": "#/$defs/AppSpec"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "title": "App",
+  "type": "object"
+}
