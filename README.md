@@ -6,7 +6,9 @@ everything it needs - repo, build runner, signing key, OpenBao entries, database
 requests and calling APIs. It never touches the cluster itself: Argo CD applies what lands in git, and the External
 Secrets Operator fills secrets from OpenBao.
 
-So far this repo holds the **request format v1** and its validator. The workflows (Temporal, Python) come next.
+This repo holds the **request format v1** and its validator, and the **worker**: Temporal workflows that compare the
+requests with what exists in Thoth (Meru's CMDB) and work out each app's step. For now it is a **dry run** - every
+step only logs what it would do.
 
 ## The request format
 
@@ -28,15 +30,34 @@ The Pydantic models in `src/shikigami/request_format.py` are the definition; `sc
 as JSON Schema, generated from them (a test fails if they drift). Everything optional has a default; fields such as
 `size: large`, `route.auth: none` or `exceptions` pause for an approval in the atlas.
 
+## How it runs
+
+One process per pod: a Temporal worker plus a small HTTP server. Replicas are identical - Temporal hands each task
+to one of them - and KEDA adds replicas when tasks queue up.
+
+- `POST /ping` - a Gitea webhook on Meru/requests: "go look". Starts `requests-sync`, or tells the running one to
+  make one more pass; the body is never trusted, only its signature checked.
+- `requests-sync` - reads `main` of Meru/requests, validates it with the same library as the gate (and does nothing
+  if anything is wrong), asks Thoth which apps exist, and starts one child workflow per app step (register,
+  update, retire), side by side. A nightly schedule runs it too, to catch a missed ping.
+- `GET /backlog` - tasks waiting on Shikigami's queue, `{"backlog": n}`; KEDA scales on it.
+- `GET /heartbeat`, `GET /ready` - alive; connected to Temporal.
+
+Temporal is reached with the pod's in-cluster certificate (mTLS) plus a 10-minute Authentik token that is swapped
+before it runs out. Settings are `SHIKIGAMI_*` environment variables (`src/shikigami/config.py`).
+
 ## Usage
 
     uv run shikigami-validate path/to/requests   # one line per problem, exit 1 if any
     uv run shikigami-schema                      # regenerate schema/ after changing the models
+    uv run shikigami-run                         # the worker + HTTP side (needs SHIKIGAMI_* settings)
 
 ## Development
 
     uv sync
     uv run ruff format --check . && uv run ruff check . && uv run ty check && uv run pytest
+
+The workflow tests start Temporal's test server (downloaded once by the SDK).
 
 Conventional commits; `main` is protected, changes go in as pull requests.
 

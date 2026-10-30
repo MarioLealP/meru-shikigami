@@ -6,6 +6,7 @@ The repo holds requests and nothing else (D35: not a god repo), so anything that
 
 import sys
 from collections import Counter
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -33,10 +34,18 @@ def _load(path: Path, model: type[App] | type[Database], problems: list[str]) ->
     return request
 
 
-def check(repo: Path) -> list[str]:
-    problems: list[str] = []
-    apps: dict[str, App] = {}
-    databases: dict[str, Database] = {}
+@dataclass
+class Loaded:
+    """Every request in a checkout, and what's wrong with it - nothing acts on a checkout with problems."""
+
+    apps: dict[str, App] = field(default_factory=dict)
+    databases: dict[str, Database] = field(default_factory=dict)
+    problems: list[str] = field(default_factory=list)
+
+
+def load(repo: Path) -> Loaded:
+    loaded = Loaded()
+    problems, apps, databases = loaded.problems, loaded.apps, loaded.databases
 
     for path in sorted(p for p in repo.rglob("*") if p.is_file() and ".git" not in p.relative_to(repo).parts[:1]):
         rel = path.relative_to(repo)
@@ -60,7 +69,11 @@ def check(repo: Path) -> list[str]:
             problems.append(f"apps/{app}.yaml: {count} databases name it as spec.app - one database per app")
     hosts = Counter(a.spec.route.host or f"{a.metadata.name}.clockmost.com" for a in apps.values())
     problems += [f"route.host {host} is used by {n} apps" for host, n in hosts.items() if n > 1]
-    return problems
+    return loaded
+
+
+def check(repo: Path) -> list[str]:
+    return load(repo).problems
 
 
 def main() -> None:
