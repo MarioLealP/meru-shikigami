@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+- The HTTP port setting is `http_port` (`SHIKIGAMI_HTTP_PORT`): Kubernetes' service link `SHIKIGAMI_PORT=tcp://...`
+  for the Service named shikigami crashed the pod at start.
+
 ### Added
 - Shikigami is a Meru app: `deploy/meru.yaml` + `deploy/values.yaml` (nuwa-app 0.5.0, certificate for Temporal,
   KEDA autoscaling on `/backlog`, its Authentik + Gitea logins via ESO), CI on its Sindri runner (checks, then build,
