@@ -60,9 +60,13 @@ before it runs out. Settings are `SHIKIGAMI_*` environment variables (`src/shiki
 ## Development
 
     uv sync
-    uv run ruff format --check . && uv run ruff check . && uv run ty check && uv run pytest
+    scripts/check.sh    # what CI runs: ruff, ty, lockfile, pytest, generated schema
 
 The workflow tests start Temporal's test server (downloaded once by the SDK).
+
+CI (`.gitea/workflows/ci.yaml`) runs on Meru's runner: the checks, then the image - on `main` pushed to
+`zot.clockmost.com/meru/shikigami`, signed with Shikigami's key, and its digest written to `deploy/values.yaml`, which
+Argo CD rolls out (`deploy/meru.yaml` makes this repo a Meru app).
 
 Conventional commits; `main` is protected, changes go in as pull requests.
 

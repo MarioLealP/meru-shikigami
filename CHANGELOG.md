@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Added
+- Shikigami is a Meru app: `deploy/meru.yaml` + `deploy/values.yaml` (nuwa-app 0.5.0, certificate for Temporal,
+  KEDA autoscaling on `/backlog`, its Authentik + Gitea logins via ESO), CI on its Sindri runner (checks, then build,
+  push, sign and deploy on `main`), `scripts/check.sh`.
 - `OnboardBuild`: an app's build credentials (cosign key pair, Zot push login + its htpasswd line, Sindri runner
   token) into OpenBao, each step keeping what exists, writes check-and-set. `shikigami-bootstrap <app>` runs it
   once on its own queue with borrowed authority. The image carries cosign v3.1.4 (checksum-pinned).
