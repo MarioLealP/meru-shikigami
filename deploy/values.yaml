@@ -5,8 +5,8 @@ name: shikigami
 owner: mario
 image:
   repository: zot.clockmost.com/meru/shikigami
-  digest: sha256:2bcc9757de1f50b88b3cae317eaf29751f024b03590dbb89bc5befd831e5ed91
-  tag: "e24f3d58b2a3"
+  digest: sha256:efb9b00b44dfaa2367bed3d36ed3af41d85d31ba711ca0434bd5a48c411bd093
+  tag: "941f09821179"
 port: 8080
 heartbeat:
   readyPath: /ready # Temporal answers over mTLS
