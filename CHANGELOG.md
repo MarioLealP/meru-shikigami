@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- `shikigami-run` logs at INFO: the workflows' and activities' lines (the dry run's "would ...") were dropped.
 - The HTTP port setting is `http_port` (`SHIKIGAMI_HTTP_PORT`): Kubernetes' service link `SHIKIGAMI_PORT=tcp://...`
   for the Service named shikigami crashed the pod at start.
 
