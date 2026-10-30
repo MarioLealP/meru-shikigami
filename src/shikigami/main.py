@@ -2,6 +2,7 @@
 identical; Temporal hands each task to one of them."""
 
 import asyncio
+import logging
 
 import httpx2
 import uvicorn
@@ -42,4 +43,6 @@ async def run() -> None:
 
 
 def main() -> None:
+    # Temporal's worker, workflow and activity loggers (the dry run's "would ..." lines) log through the root logger.
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
     asyncio.run(run())
