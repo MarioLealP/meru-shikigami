@@ -9,7 +9,7 @@ from temporalio.common import RetryPolicy
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
 with workflow.unsafe.imports_passed_through():
-    from shikigami.activities import Activities
+    from shikigami.activities import Activities, BuildActivities
     from shikigami.models import AppAction
     from shikigami.plan import plan
 
@@ -27,6 +27,25 @@ class AppWorkflow:
         await workflow.execute_activity_method(
             Activities.dry_run, action, start_to_close_timeout=TIMEOUT, retry_policy=RETRY
         )
+
+
+@workflow.defn
+class OnboardBuild:
+    """An app's build credentials: build keys, then its Zot login (it reads the keys' entry), then its runner token.
+    Returns the cosign public key. Each step keeps what exists, so a re-run only fills gaps."""
+
+    @workflow.run
+    async def run(self, app: str) -> str:
+        public_key = await workflow.execute_activity_method(
+            BuildActivities.ensure_build_keys, app, start_to_close_timeout=TIMEOUT, retry_policy=RETRY
+        )
+        await workflow.execute_activity_method(
+            BuildActivities.ensure_zot_login, app, start_to_close_timeout=TIMEOUT, retry_policy=RETRY
+        )
+        await workflow.execute_activity_method(
+            BuildActivities.ensure_runner_registration, app, start_to_close_timeout=TIMEOUT, retry_policy=RETRY
+        )
+        return public_key
 
 
 @workflow.defn

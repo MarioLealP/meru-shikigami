@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Added
+- `OnboardBuild`: an app's build credentials (cosign key pair, Zot push login + its htpasswd line, Sindri runner
+  token) into OpenBao, each step keeping what exists, writes check-and-set. `shikigami-bootstrap <app>` runs it
+  once on its own queue with borrowed authority. The image carries cosign v3.1.4 (checksum-pinned).
 - The worker (`shikigami-run`), dry run: `requests-sync` reads Meru/requests at one commit, validates it, compares it
   with Thoth's apps and starts one child workflow per app step (register / update / retire), each only logging what
   it would do. HTTP: `/ping` (signal-with-start, Gitea signature checked when a secret is set), `/backlog` (for

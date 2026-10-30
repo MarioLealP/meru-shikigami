@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     gitea_token: SecretStr
     thoth_url: str = "http://thoth.thoth.svc"
 
+    # Making an app's build credentials (D32, D66): the registry its builds push to, and the cosign binary.
+    zot_registry: str = "zot.clockmost.com"
+    cosign: str = "cosign"
+
     # How many app workflows' activities one worker runs at once (D75): replicas x this = the ceiling.
     max_concurrent_activities: int = 4
     # The nightly re-read that catches missed pings (D65), Temporal's cron syntax, UTC.
