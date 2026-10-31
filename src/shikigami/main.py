@@ -32,7 +32,12 @@ async def run() -> None:
             client,
             task_queue=settings.task_queue,
             workflows=[RequestsSync, AppWorkflow],
-            activities=[activities.read_requests, activities.read_existing_apps, activities.dry_run],
+            activities=[
+                activities.read_requests,
+                activities.read_existing_apps,
+                activities.declare_apps,
+                activities.dry_run,
+            ],
             max_concurrent_activities=settings.max_concurrent_activities,
         )
         server = uvicorn.Server(uvicorn.Config(make_app(settings, client), host="0.0.0.0", port=settings.http_port))

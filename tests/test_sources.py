@@ -1,9 +1,13 @@
 import io
+import json
 import tarfile
 
 import httpx2
+import yaml
 
-from shikigami.sources import read_existing_apps, read_requests
+from shikigami.models import RequestsSnapshot
+from shikigami.request_format import App
+from shikigami.sources import declare_apps, read_existing_apps, read_requests
 
 ECHO = b"""\
 apiVersion: meru.clockmost.com/v1
@@ -67,3 +71,24 @@ async def test_thoth_apps_by_key():
     async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http:
         apps = await read_existing_apps(http, "http://thoth.test", "t")
     assert apps["echo"].template == "nuwa/python"
+
+
+async def test_declares_every_requested_app_as_one_snapshot():
+    app = App.model_validate(yaml.safe_load(ECHO))
+    seen: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request)
+        return httpx2.Response(200, json={"created": 1})
+
+    snapshot = RequestsSnapshot(commit="abc123", apps={"echo": app}, databases={}, problems=[])
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http:
+        summary = await declare_apps(http, "http://thoth.test", "t", snapshot)
+    assert summary == {"created": 1}
+    [request] = seen
+    assert request.method == "PUT"
+    assert request.url.path == "/v1/scans/requests-abc123/shikigami/all/items"
+    assert request.headers["authorization"] == "Bearer t"
+    assert json.loads(request.content) == {
+        "items": [{"type": "app", "key": "echo", "name": "echo", "attributes": {"template": "nuwa/python"}}]
+    }
