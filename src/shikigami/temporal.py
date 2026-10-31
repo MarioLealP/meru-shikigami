@@ -19,10 +19,13 @@ from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.service import TLSConfig
 
 from shikigami.config import Settings
-from shikigami.tokens import TokenSource
+from shikigami.tokens import EARLY, TokenSource
 from shikigami.workflows import SYNC_ID, RequestsSync
 
-REFRESH_EVERY = 240  # seconds; tokens last 10 min, TokenSource renews one a minute before it runs out
+# TokenSource only renews in a token's last EARLY seconds, so the loop must look more often than that or it sleeps
+# straight past the window (240 s did: ticks at 4, 8, 12 min missed the 9-10 min window, and the worker crashed
+# on an expired token every ~11 min). A look is a clock compare unless a renewal is due.
+REFRESH_EVERY = EARLY // 2
 NIGHTLY_ID = "requests-sync-nightly"
 
 
