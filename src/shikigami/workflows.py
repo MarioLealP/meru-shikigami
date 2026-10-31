@@ -16,6 +16,8 @@ with workflow.unsafe.imports_passed_through():
 SYNC_ID = "requests-sync"  # one id: pings while a run is open only queue one more pass (D65)
 TIMEOUT = timedelta(minutes=2)  # per attempt
 RETRY = RetryPolicy(maximum_attempts=5)  # then the run fails and the next ping or night tries again
+# Argo applies a commit within ~3 min (poll 120 s + 60 s jitter); look every 30 s for 15 min, then the run fails
+WAIT_STOPPED = RetryPolicy(initial_interval=timedelta(seconds=30), backoff_coefficient=1.0, maximum_attempts=30)
 
 
 def fingerprint(public_key: str) -> str:
@@ -28,8 +30,8 @@ def fingerprint(public_key: str) -> str:
 class AppWorkflow:
     """One app's pass, as a child of requests-sync, so many apps run side by side and fail apart (D75). Requested apps
     walk their steps in order, each keeping what exists (D78): repo, build credentials (OnboardBuild, its own child),
-    then its fence + signing key, proposed as PRs (D82), then the deploy files (D81). Retiring stays a dry run (only
-    Anubis retires, D53)."""
+    then its fence + signing key, proposed as PRs (D82), then the deploy files (D81). A request marked removed runs the
+    retire pass (D85); an app with no request at all stays a dry run."""
 
     @workflow.run
     async def run(self, action: AppAction) -> None:
@@ -60,9 +62,31 @@ class AppWorkflow:
                     retry_policy=RETRY,
                 )
                 workflow.logger.info("app %s: deploy files %s", action.app, deploy)
+        if action.kind == "retire" and action.template:  # removed by its request (D83); no request at all: dry run
+            await self._retire(action.app)
+            return
         await workflow.execute_activity_method(
             Activities.dry_run, action, start_to_close_timeout=TIMEOUT, retry_policy=RETRY
         )
+
+    async def _retire(self, app: str) -> None:
+        """D85, in order: the stop must be applied before the Application goes - preserveResourcesOnDeletion would
+        leave running pods behind - and the trust goes once nothing uses it. The repo is archived last."""
+
+        async def step(method, retry_policy: RetryPolicy = RETRY):  # method: an activity method
+            return await workflow.execute_activity_method(
+                method, app, start_to_close_timeout=TIMEOUT, retry_policy=retry_policy
+            )
+
+        workflow.logger.info("app %s: retire - stop %s", app, await step(Activities.retire_stop))
+        workflow.logger.info("app %s: retire - Argo %s", app, await step(Activities.retire_wait_stopped, WAIT_STOPPED))
+        workflow.logger.info("app %s: retire - marker %s", app, await step(Activities.retire_park_marker))
+        workflow.logger.info("app %s: retire - %s", app, await step(Activities.retire_trust))
+        workflow.logger.info("app %s: retire - %d runner(s) removed", app, await step(Activities.retire_runner))
+        zot = await step(BuildActivities.revoke_zot_login)
+        workflow.logger.info("app %s: retire - Zot login %s", app, "revoked" if zot else "already gone")
+        archived = await step(Activities.retire_archive)
+        workflow.logger.info("app %s: retire - repo %s", app, "archived" if archived else "already archived")
 
 
 @workflow.defn

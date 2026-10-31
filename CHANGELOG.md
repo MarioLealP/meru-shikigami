@@ -3,6 +3,13 @@
 ## [Unreleased]
 
 ### Added
+- The retire pass (D85) for a request marked removed, in order, each step keeping what's done: stop commit
+  (`enabled: false` + `build: false`) -> wait until Argo CD has synced it with no workload left (read-only, 30 s
+  checks for 15 min) -> park the marker back to `deploy/meru.yaml.in` (the ApplicationSet drops the app; onboarding
+  again undoes it) -> removal PRs for the fence, key + build exception and push rule ("retire <app>: ...") -> the
+  repo's runners removed from Gitea -> the Zot login line out of htpasswd -> the repo archived. Deletes nothing:
+  Charon purges after the retention. Proposals can delete files (`None`). The PR lookup takes the newest of both
+  directions, so a restore after a retire proposes onboarding again. Deploy: nuwa-app 0.10.0 with `kubernetesApi`.
 - `spec.removed` on App and Database requests (D83): retiring keeps the request file; Charon deletes it last, after
   the retention. `metadata.removedBy` + `removedAt` (Xolotl writes them, like `approvedBy`) only on a removed
   request. A removed app plans as `retire` on every pass (still the dry run until the retire workflow). Validation:

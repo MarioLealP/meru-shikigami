@@ -111,3 +111,36 @@ async def run_workflow(
         json={"ref": ref},
     )
     response.raise_for_status()
+
+
+async def head(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str, branch: str = "main") -> str:
+    """The commit a branch points at."""
+    response = await http.get(
+        f"{gitea_url}/api/v1/repos/{org}/{repo}/branches/{branch}", headers={"Authorization": f"token {token}"}
+    )
+    response.raise_for_status()
+    return str(response.json()["commit"]["id"])
+
+
+async def delete_runners(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str) -> int:
+    """Remove every runner registered to the repo (retiring, D85; repo admin with our patched build, D80). Returns
+    how many went."""
+    base = f"{gitea_url}/api/v1/repos/{org}/{repo}/actions/runners"
+    headers = {"Authorization": f"token {token}"}
+    response = await http.get(base, headers=headers)
+    response.raise_for_status()
+    runners = response.json().get("runners") or []
+    for runner in runners:
+        (await http.delete(f"{base}/{runner['id']}", headers=headers)).raise_for_status()
+    return len(runners)
+
+
+async def archive(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str) -> bool:
+    """Archive the repo (read-only from then on); True if it was archived now, False if it already was."""
+    url, headers = f"{gitea_url}/api/v1/repos/{org}/{repo}", {"Authorization": f"token {token}"}
+    current = await http.get(url, headers=headers)
+    current.raise_for_status()
+    if current.json().get("archived"):
+        return False
+    (await http.patch(url, headers=headers, json={"archived": True})).raise_for_status()
+    return True

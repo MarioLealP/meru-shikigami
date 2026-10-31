@@ -29,6 +29,8 @@ certificate:
   enabled: true
 openbaoLogin:
   enabled: true # OnboardBuild writes build credentials with Shikigami's own OpenBao login (D79)
+kubernetesApi:
+  enabled: true # the retire pass reads Argo CD Applications (D85; Meru/meru rbac/: get applications only)
 # More workers while app steps queue up (D75): KEDA polls /backlog, one replica per 5 waiting tasks, 1 to 4.
 autoscaling:
   enabled: true

@@ -8,6 +8,7 @@ from pydantic import SecretStr
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
+from shikigami import trust
 from shikigami.activities import Activities
 from shikigami.config import Settings
 from shikigami.models import RequestsSnapshot
@@ -249,3 +250,167 @@ async def test_a_trust_repo_that_lost_its_layout_is_not_retried(monkeypatch: pyt
     with pytest.raises(ApplicationError, match="no `  - projects/") as raised:
         await onboard_trust(monkeypatch, public, {})
     assert raised.value.non_retryable
+
+
+def retiring(
+    kube_dir: Path,
+    files: dict[str, str],
+    argo: dict | None = None,
+    pulls: dict | None = None,
+    public: dict | None = None,
+) -> tuple[Activities, list[dict]]:
+    """Activities over a fake Gitea (Meru/golem's files, its runners and archive flag, public trust repos + PR lists)
+    and a fake Kubernetes API holding app-golem (or not)."""
+    calls: list[dict] = []
+    repo = {"archived": False}
+
+    def gitea(request: httpx2.Request) -> httpx2.Response:
+        path = request.url.path.removeprefix("/api/v1/repos/Meru/")
+        if request.method == "POST" and path == "golem/contents":
+            calls.append(json.loads(request.content))
+            return httpx2.Response(201, json={})
+        if path.startswith("golem/contents/"):
+            name = path.removeprefix("golem/contents/")
+            if name not in files:
+                return httpx2.Response(404, json={})
+            return httpx2.Response(
+                200, json={"content": base64.b64encode(files[name].encode()).decode(), "sha": f"sha-{name}"}
+            )
+        if path == "golem/branches/main":
+            return httpx2.Response(200, json={"commit": {"id": "c0ffee"}})
+        if path == "golem/actions/runners":
+            return httpx2.Response(200, json={"runners": [{"id": 7}], "total_count": 1})
+        if request.method == "DELETE" and path == "golem/actions/runners/7":
+            calls.append({"deleted runner": 7})
+            return httpx2.Response(204)
+        if path == "golem" and request.method == "GET":
+            return httpx2.Response(200, json=repo)
+        if path == "golem" and request.method == "PATCH":
+            repo.update(json.loads(request.content))
+            calls.append({"patched": json.loads(request.content)})
+            return httpx2.Response(200, json=repo)
+        if path.endswith("/pulls"):
+            return httpx2.Response(200, json=(pulls or {}).get(path.split("/")[0], []))
+        if "/raw/" in path:
+            return httpx2.Response(200, text=(public or {})[path]) if path in (public or {}) else httpx2.Response(404)
+        return httpx2.Response(500)
+
+    def kubernetes(request: httpx2.Request) -> httpx2.Response:
+        assert request.headers["authorization"] == "Bearer kube-token"
+        assert request.url.path == "/apis/argoproj.io/v1alpha1/namespaces/argocd/applications/app-golem"
+        return httpx2.Response(200, json=argo) if argo is not None else httpx2.Response(404, json={})
+
+    http = httpx2.AsyncClient(transport=httpx2.MockTransport(gitea))
+    kube = httpx2.AsyncClient(transport=httpx2.MockTransport(kubernetes))
+    tokens = TokenSource(http, "https://auth.test/token/", "thoth", "shikigami", SecretStr("pw"))
+    (kube_dir / "token").write_text("kube-token\n")  # the pod's API token (nuwa-app kubernetesApi)
+    settings = Settings.model_construct(
+        gitea_url="https://git.test",
+        gitea_token=SecretStr("tok"),
+        gitea_user="shikigami",
+        apps_org="Meru",
+        kubernetes_url="https://kube.test",
+        kubernetes_dir=kube_dir,
+        argocd_namespace="argocd",
+    )
+    return Activities(settings, http, tokens, kube), calls
+
+
+GOLEM_MARKER = "owner: mario\nchart: nuwa-app-0.9.0\nbuild: true\n"
+GOLEM_VALUES = "name: golem\nowner: mario\n"
+
+
+async def test_the_stop_is_one_commit_and_kept_after(tmp_path: Path):
+    activities, calls = retiring(tmp_path, {"deploy/meru.yaml": GOLEM_MARKER, "deploy/values.yaml": GOLEM_VALUES})
+    assert await ActivityEnvironment().run(activities.retire_stop, "golem") == "written"
+    (commit,) = calls
+    texts = {f["path"]: base64.b64decode(f["content"]).decode() for f in commit["files"]}
+    assert "enabled: false" in texts["deploy/values.yaml"] and "build: false" in texts["deploy/meru.yaml"]
+    activities, calls = retiring(tmp_path, texts)
+    assert await ActivityEnvironment().run(activities.retire_stop, "golem") == "kept"
+    activities, calls = retiring(tmp_path, {"deploy/meru.yaml.in": GOLEM_MARKER, "deploy/values.yaml": GOLEM_VALUES})
+    assert await ActivityEnvironment().run(activities.retire_stop, "golem") == "kept (marker parked)"
+    assert calls == []
+
+
+ARGO_STOPPED = {
+    "status": {"sync": {"status": "Synced", "revisions": ["n", "c0ffee"]}, "resources": [{"kind": "Service"}]}
+}
+ARGO_RUNNING = {
+    "status": {"sync": {"status": "Synced", "revisions": ["n", "c0ffee"]}, "resources": [{"kind": "Deployment"}]}
+}
+
+
+async def test_waiting_for_argo_retries_until_nothing_runs(tmp_path: Path):
+    activities, _ = retiring(tmp_path, {}, argo=ARGO_RUNNING)
+    with pytest.raises(ApplicationError, match="still has Deployment") as raised:
+        await ActivityEnvironment().run(activities.retire_wait_stopped, "golem")
+    assert not raised.value.non_retryable  # the workflow's policy retries it, 30 s apart
+    activities, _ = retiring(tmp_path, {}, argo=ARGO_STOPPED)
+    assert await ActivityEnvironment().run(activities.retire_wait_stopped, "golem") == "stopped"
+    activities, _ = retiring(tmp_path, {}, argo=None)
+    assert await ActivityEnvironment().run(activities.retire_wait_stopped, "golem") == "gone"
+
+
+async def test_parking_moves_the_marker_back_to_the_template_file(tmp_path: Path):
+    stopped = "owner: mario\nchart: nuwa-app-0.9.0\nbuild: false # retired\n"
+    activities, calls = retiring(tmp_path, {"deploy/meru.yaml": stopped})
+    assert await ActivityEnvironment().run(activities.retire_park_marker, "golem") == "parked"
+    ops = {f["path"]: f for f in calls[0]["files"]}
+    assert (
+        base64.b64decode(ops["deploy/meru.yaml.in"]["content"]).decode()
+        == 'owner: ""\nchart: nuwa-app-0.9.0\nbuild: true\n'
+    )
+    assert ops["deploy/meru.yaml"] == {"operation": "delete", "path": "deploy/meru.yaml", "sha": "sha-deploy/meru.yaml"}
+
+
+async def test_the_runner_goes_and_the_repo_is_archived_once(tmp_path: Path):
+    activities, calls = retiring(tmp_path, {})
+    assert await ActivityEnvironment().run(activities.retire_runner, "golem") == 1
+    assert await ActivityEnvironment().run(activities.retire_archive, "golem") is True
+    assert await ActivityEnvironment().run(activities.retire_archive, "golem") is False
+    assert calls == [{"deleted runner": 7}, {"patched": {"archived": True}}]
+
+
+TRUSTED_GOLEM = {
+    "meru/raw/projects/golem.yaml": "kind: AppProject\n",
+    "meru/raw/kustomization.yaml": "resources:\n  - projects/echo.yaml\n  - projects/golem.yaml\n",
+    "kyverno/raw/keys/meru-signing-keys.yaml": SIGNING_KEYS
+    + "  golem: |\n    -----BEGIN PUBLIC KEY-----\n    GOLEM\n    -----END PUBLIC KEY-----\n",
+    "kyverno/raw/exceptions/golem-build.yaml": "kind: PolicyException\n",
+    "kyverno/raw/kustomization.yaml": "resources:\n  - exceptions/echo-build.yaml\n  - exceptions/golem-build.yaml\n",
+    "zot/raw/config.json": trust.with_push_rule(
+        (Path(__file__).parent / "fixtures" / "zot-config.json").read_text(), "golem"
+    ),
+}
+
+
+async def test_retiring_trust_proposes_three_removal_prs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    opened: list[dict] = []
+
+    async def fake_open_pr(remote, user, token, topic, title, description, files):
+        opened.append({"topic": topic, "title": title, "files": files, "description": description})
+
+    monkeypatch.setattr("shikigami.activities.open_pr", fake_open_pr)
+    pulls = {"meru": [{"number": 21, "title": "onboard golem: fence", "state": "closed", "merged": True}]}
+    activities, _ = retiring(tmp_path, {}, pulls=pulls, public=TRUSTED_GOLEM)
+    result = await ActivityEnvironment().run(activities.retire_trust, "golem")
+    assert result == "fence proposed in Meru/meru; key proposed in Meru/kyverno; push rule proposed in Meru/zot"
+    fence, keys, push = opened
+    assert (fence["title"], fence["topic"]) == ("retire golem: fence", "retire-golem")  # the merged onboard PR is older
+    assert fence["files"] == {"projects/golem.yaml": None, "kustomization.yaml": "resources:\n  - projects/echo.yaml\n"}
+    assert keys["files"]["exceptions/golem-build.yaml"] is None
+    assert "golem" not in keys["files"]["keys/meru-signing-keys.yaml"]
+    assert '"golem-builder"' not in push["files"]["config.json"]
+    assert "only removes `golem`'s entries" in fence["description"]
+
+
+async def test_a_restore_proposes_onboarding_again_after_a_merged_retire(monkeypatch: pytest.MonkeyPatch):
+    pulls = {
+        "meru": [
+            {"number": 21, "title": "onboard golem: fence", "state": "closed", "merged": True},
+            {"number": 30, "title": "retire golem: fence", "state": "closed", "merged": True},
+        ]
+    }
+    result, _ = await onboard_trust(monkeypatch, TRUST_REPOS, pulls)
+    assert result.startswith("fence proposed in Meru/meru")  # not "Meru/meru#21 merged, not on main yet"

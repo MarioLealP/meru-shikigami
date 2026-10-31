@@ -67,6 +67,15 @@ async def test_a_proposal_is_one_commit_pushed_to_refs_for_main_with_its_options
     assert git(remote, "rev-list", "--count", "main").strip() == "1"  # main untouched
 
 
+async def test_none_deletes_a_file_in_the_proposal(remote: Path):
+    await open_pr(
+        f"file://{remote}", "shikigami", "tok", "retire-golem", "retire golem: fence", "d", {"kustomization.yaml": None}
+    )
+    commit = git(remote, "rev-parse", "refs/for/main").strip()
+    assert git(remote, "ls-tree", "--name-only", commit).strip() == ""  # the seed's only file is gone
+    assert git(remote, "ls-tree", "--name-only", "main").strip() == "kustomization.yaml"  # main untouched
+
+
 async def test_a_refused_push_says_why(remote: Path):
     (remote / "hooks" / "pre-receive").write_text("#!/bin/sh\necho 'User permission denied for writing.' >&2\nexit 1\n")
     with pytest.raises(ProposalFailed, match="permission denied"):
@@ -85,6 +94,6 @@ async def test_find_pr_matches_the_exact_title_open_or_closed():
         return httpx2.Response(200, json=pulls)
 
     http = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
-    found = await find_pr(http, "https://git.test", "Meru", "meru", "onboard golem: fence")
+    found = await find_pr(http, "https://git.test", "Meru", "meru", ["onboard golem: fence"])
     assert found is not None and found["number"] == 7
-    assert await find_pr(http, "https://git.test", "Meru", "meru", "onboard other: fence") is None
+    assert await find_pr(http, "https://git.test", "Meru", "meru", ["onboard other: fence"]) is None

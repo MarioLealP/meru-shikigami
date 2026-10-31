@@ -86,6 +86,11 @@ def with_resource(kustomization: str, folder: str, path: str) -> str:
     return f"{kustomization[:end]}\n  - {path}{kustomization[end:]}"
 
 
+def without_resource(kustomization: str, path: str) -> str:
+    """The kustomization without its `- <path>` line (kept if it isn't listed)."""
+    return re.sub(rf"^  - {re.escape(path)}\n", "", kustomization, count=1, flags=re.MULTILINE)
+
+
 def with_key(signing_keys: str, app: str, public_key: str) -> str:
     """The signing-keys ConfigMap with the app's key added at the end of `data` (the file's last section). Kept if it
     already trusts exactly this key; another key for the app raises Conflict."""
@@ -134,4 +139,31 @@ def with_push_rule(config: str, app: str) -> str:
             return config
         raise Conflict(f"Meru/zot already has another rule for {repo}")
     repositories[repo] = push_rule(app)
+    return json.dumps(parsed, indent=2) + "\n"
+
+
+def without_key(signing_keys: str, app: str) -> str:
+    """The signing-keys ConfigMap without the app's key block; every other key stays exactly as it was."""
+    data = (yaml.safe_load(signing_keys) or {}).get("data")
+    if not isinstance(data, dict):
+        raise BadLayout("keys/meru-signing-keys.yaml: no data section")
+    if app not in data:
+        return signing_keys
+    removed = re.sub(rf"^  {re.escape(app)}: \|\n(?:    [^\n]*\n)*", "", signing_keys, count=1, flags=re.MULTILINE)
+    left = (yaml.safe_load(removed) or {}).get("data") or {}
+    if app in left or left != {name: key for name, key in data.items() if name != app}:
+        raise BadLayout(f"keys/meru-signing-keys.yaml: {app}'s key isn't one plain block - remove it by hand")
+    return removed
+
+
+def without_push_rule(config: str, app: str) -> str:
+    """Zot's config.json without meru/<app>'s rule (same layout rule as with_push_rule)."""
+    parsed = json.loads(config)
+    if json.dumps(parsed, indent=2) + "\n" != config:
+        raise BadLayout("config.json isn't in json.dumps(indent=2) layout - remove the push rule by hand")
+    repositories = parsed.get("http", {}).get("accessControl", {}).get("repositories")
+    if not isinstance(repositories, dict):
+        raise BadLayout("config.json: no http.accessControl.repositories")
+    if repositories.pop(f"meru/{app}", None) is None:
+        return config
     return json.dumps(parsed, indent=2) + "\n"
