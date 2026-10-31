@@ -44,7 +44,10 @@ def openbao(store: dict[str, list[dict[str, str] | None]]) -> httpx2.AsyncClient
 
 
 def kv(store: dict[str, list[dict[str, str] | None]]) -> KV:
-    return KV(openbao(store), "https://openbao.test", "apps", "t")
+    async def token() -> str:
+        return "t"
+
+    return KV(openbao(store), "https://openbao.test", "apps", token)
 
 
 async def fake_new_key(cosign: str) -> tuple[str, str, str]:

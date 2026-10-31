@@ -1,6 +1,6 @@
 # Makes this repo a Meru app: Meru/meru finds it and deploys it into namespace shikigami (deploy/values.yaml).
 owner: mario
-chart: nuwa-app-0.6.0 # the nuwa-app release Shikigami is tested with (certificate, autoscaling, clusterIP)
+chart: nuwa-app-0.7.0 # the nuwa-app release Shikigami is tested with (certificate, autoscaling, clusterIP, openbaoLogin)
 build: true # Shikigami's own code: also its build namespace + Sindri runner
 buildLabels:
   # the checks job (.gitea/workflows/): uv 0.13.6-python3.15-trixie (python, uv, git)

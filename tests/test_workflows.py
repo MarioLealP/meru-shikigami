@@ -9,7 +9,7 @@ from temporalio.worker import Worker
 
 from shikigami.models import AppAction, ExistingApp, RequestsSnapshot
 from shikigami.request_format import App
-from shikigami.workflows import AppWorkflow, RequestsSync
+from shikigami.workflows import AppWorkflow, OnboardBuild, RequestsSync, fingerprint
 
 ECHO = App.model_validate(
     {
@@ -50,7 +50,31 @@ def activities(
     async def dry_run(action: AppAction) -> None:
         done.append(action)
 
-    return [read_requests, read_existing_apps, declare_apps, ensure_repo, dry_run]
+    @activity.defn(name="ensure_build_keys")
+    async def ensure_build_keys(app: str) -> str:
+        log.append(f"ensure_build_keys {app}")
+        return "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIabcdefghijkl\n-----END PUBLIC KEY-----\n"
+
+    @activity.defn(name="ensure_zot_login")
+    async def ensure_zot_login(app: str) -> bool:
+        log.append(f"ensure_zot_login {app}")
+        return False
+
+    @activity.defn(name="ensure_runner_registration")
+    async def ensure_runner_registration(app: str) -> bool:
+        log.append(f"ensure_runner_registration {app}")
+        return False
+
+    return [
+        read_requests,
+        read_existing_apps,
+        declare_apps,
+        ensure_repo,
+        dry_run,
+        ensure_build_keys,
+        ensure_zot_login,
+        ensure_runner_registration,
+    ]
 
 
 @pytest.fixture
@@ -67,7 +91,7 @@ async def run_sync(
     async with Worker(
         client,
         task_queue=queue,
-        workflows=[RequestsSync, AppWorkflow],
+        workflows=[RequestsSync, AppWorkflow, OnboardBuild],
         activities=activities(snapshot, existing, done, log),
     ):
         result = await client.execute_workflow(RequestsSync.run, id=f"sync-{uuid.uuid4()}", task_queue=queue)
@@ -106,6 +130,26 @@ async def test_every_requested_app_ensures_its_repo_and_retiring_touches_nothing
     assert [(a.app, a.kind) for a in result] == [("echo", "check"), ("old", "retire")]
     assert [line for line in log if line.startswith("ensure_repo")] == ["ensure_repo echo nuwa/python"]
     assert sorted(a.app for a in done) == ["echo", "old"]
+
+
+async def test_build_credentials_follow_the_repo_in_order(env: WorkflowEnvironment):
+    snapshot = RequestsSnapshot(commit="c1", apps={"echo": ECHO}, databases={}, problems=[])
+    gone = ExistingApp(key="old", status="active", template="nuwa/python")
+    log: list[str] = []
+    await run_sync(env.client, snapshot, {"old": gone}, log)
+    steps = [line for line in log if line.split()[0].startswith("ensure_")]
+    assert steps == [
+        "ensure_repo echo nuwa/python",
+        "ensure_build_keys echo",
+        "ensure_zot_login echo",
+        "ensure_runner_registration echo",
+    ]  # nothing for "old": retiring builds nothing
+
+
+def test_fingerprint_shows_the_end_of_the_key():
+    key = "-----BEGIN PUBLIC KEY-----\nAAAA\nBBBBCCCCDDDDEEEE\n-----END PUBLIC KEY-----\n"
+    assert fingerprint(key) == "...CCCCDDDDEEEE"
+    assert fingerprint("") == "(none)"
 
 
 async def test_requests_with_problems_declare_nothing(env: WorkflowEnvironment):

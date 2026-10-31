@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     # Making an app's build credentials (D32, D66): the registry its builds push to, and the cosign binary.
     zot_registry: str = "zot.clockmost.com"
     cosign: str = "cosign"
+    # ... written to OpenBao with Shikigami's own login (D79): the pod's token + CA from nuwa-app's openbaoLogin.
+    openbao_addr: str = "https://openbao.clockmost.internal:8204"
+    openbao_role: str = "meru-shikigami-onboard"
+    openbao_dir: Path = Path("/var/run/meru/openbao")  # token, ca.crt
 
     # How many app workflows' activities one worker runs at once (D75): replicas x this = the ceiling.
     max_concurrent_activities: int = 4
