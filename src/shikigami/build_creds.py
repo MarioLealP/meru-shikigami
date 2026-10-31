@@ -50,6 +50,15 @@ def htpasswd_with(text: str, user: str, password: str) -> str | None:
     return "\n".join([*kept, f"{user}:{hashed}"]) + "\n"
 
 
+def htpasswd_without(text: str, user: str) -> str | None:
+    """`text` without `user`'s line, or None when there is none (nothing to write)."""
+    lines = text.splitlines()
+    kept = [line for line in lines if line.partition(":")[0] != user]
+    if len(kept) == len(lines):
+        return None
+    return "\n".join(kept) + "\n" if kept else ""
+
+
 async def _cosign(cosign: str, password: str, *args: str, cwd: str) -> bytes:
     process = await asyncio.create_subprocess_exec(
         cosign,

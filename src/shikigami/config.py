@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     openbao_role: str = "meru-shikigami-onboard"
     openbao_dir: Path = Path("/var/run/meru/openbao")  # token, ca.crt
 
+    # Reading Argo CD Applications (the retire pass, D85): the pod's API token + cluster CA (nuwa-app kubernetesApi).
+    kubernetes_url: str = "https://kubernetes.default.svc"
+    kubernetes_dir: Path = Path("/var/run/meru/kubernetes")  # token, ca.crt
+    argocd_namespace: str = "argocd"
+
     # How many app workflows' activities one worker runs at once (D75): replicas x this = the ceiling.
     max_concurrent_activities: int = 4
     # The nightly re-read that catches missed pings (D65), Temporal's cron syntax, UTC.

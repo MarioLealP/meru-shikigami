@@ -2,19 +2,31 @@
 run twice."""
 
 import secrets
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 
 import httpx2
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from shikigami import build_creds as creds
-from shikigami import marker, trust
+from shikigami import marker, retire, trust
+from shikigami.argo import application, not_stopped
 from shikigami.config import Settings
 from shikigami.models import AppAction, ExistingApp, RequestsSnapshot
 from shikigami.openbao import KV
 from shikigami.proposals import ProposalFailed, find_pr, open_pr
-from shikigami.repos import NoTemplate, change, commit_files, ensure_repo, public_file, read_file, run_workflow
+from shikigami.repos import (
+    NoTemplate,
+    archive,
+    change,
+    commit_files,
+    delete_runners,
+    ensure_repo,
+    head,
+    public_file,
+    read_file,
+    run_workflow,
+)
 from shikigami.sources import declare_apps, read_existing_apps, read_requests
 from shikigami.tokens import TokenSource
 
@@ -26,10 +38,27 @@ Shikigami only reads this repo, so this is a proposal. It's merged by Xolotl onc
 Meru/requests and this PR only adds `{app}`; until Xolotl exists, by Mario. Closing it unmerged stops Shikigami
 proposing it again."""
 
+RETIREMENT = """Shikigami's retirement of `{app}` (D85): its {what} comes out - the app is stopped and its Argo CD
+Application gone, so nothing uses it any more.
+
+{files}
+
+Shikigami only reads this repo, so this is a proposal. It's merged by Xolotl once the removal is approved on
+Meru/requests and this PR only removes `{app}`'s entries; until Xolotl exists, by Mario. Closing it unmerged stops
+Shikigami proposing it again."""
+
+PROPOSALS = {"onboard": PROPOSAL, "retire": RETIREMENT}
+
 
 class Activities:
-    def __init__(self, settings: Settings, http: httpx2.AsyncClient, thoth_tokens: TokenSource):
-        self._settings, self._http, self._thoth_tokens = settings, http, thoth_tokens
+    def __init__(
+        self,
+        settings: Settings,
+        http: httpx2.AsyncClient,
+        thoth_tokens: TokenSource,
+        kube: httpx2.AsyncClient | None = None,  # trusts the cluster's CA; only the retire pass reads the API
+    ):
+        self._settings, self._http, self._thoth_tokens, self._kube = settings, http, thoth_tokens, kube
 
     @activity.defn
     async def read_requests(self) -> RequestsSnapshot:
@@ -129,13 +158,17 @@ class Activities:
             raise trust.BadLayout(f"{org}/{repo} has no {path}")
         return text
 
-    async def _propose(self, app: str, repo: str, what: str, files: dict[str, str]) -> str:
+    async def _propose(
+        self, app: str, repo: str, what: str, files: Mapping[str, str | None], direction: str = "onboard"
+    ) -> str:
         if not files:
             return "kept"
         s = self._settings
-        where, title = f"{s.apps_org}/{repo}", f"onboard {app}: {what}"
-        pr = await find_pr(self._http, s.gitea_url, s.apps_org, repo, title)
-        if pr is not None:
+        where, title = f"{s.apps_org}/{repo}", f"{direction} {app}: {what}"
+        # the newest PR of either direction decides: after a retire and a restore, the old onboard PR doesn't count
+        titles = [f"{d} {app}: {what}" for d in PROPOSALS]
+        pr = await find_pr(self._http, s.gitea_url, s.apps_org, repo, titles)
+        if pr is not None and pr["title"] == title:
             if pr["state"] == "open":
                 return f"waiting on {where}#{pr['number']}"
             if pr.get("merged"):
@@ -146,15 +179,123 @@ class Activities:
                 f"{s.gitea_url}/{where}.git",
                 s.gitea_user,
                 s.gitea_token.get_secret_value(),
-                f"onboard-{app}",
+                f"{direction}-{app}",
                 title,
-                PROPOSAL.format(app=app, what=what, files="\n".join(f"- `{path}`" for path in files)),
+                PROPOSALS[direction].format(app=app, what=what, files="\n".join(f"- `{path}`" for path in files)),
                 files,
             )
         except ProposalFailed as e:
             raise ApplicationError(str(e)) from e  # retried: a push can fail on the network too
-        activity.logger.info("%s: %s proposed in %s", app, what, where)
+        activity.logger.info("%s: %s %s proposed in %s", app, direction, what, where)
         return f"proposed in {where}"
+
+    # The retire pass (D85), in this order, each step keeping what's done: stop -> wait for Argo -> park the marker ->
+    # removal PRs -> revoke runner (+ the Zot login, BuildActivities) -> archive. Deletes nothing: Charon purges later.
+
+    @activity.defn
+    async def retire_stop(self, app: str) -> str:
+        """One commit: `enabled: false` (no workload) + `build: false` (no runner). Kept once both are there, or once
+        the marker is parked (a later pass)."""
+        s = self._settings
+        token, org = s.gitea_token.get_secret_value(), s.apps_org
+        marker_file = await read_file(self._http, s.gitea_url, token, org, app, "deploy/meru.yaml")
+        if marker_file is None:
+            return "kept (marker parked)"
+        values = await read_file(self._http, s.gitea_url, token, org, app, "deploy/values.yaml")
+        if values is None:
+            raise ApplicationError(f"Meru/{app} has no deploy/values.yaml", non_retryable=True)
+        if retire.is_stopped(values[0], marker_file[0]):
+            return "kept"
+        try:
+            files = [
+                change("update", "deploy/values.yaml", retire.stopped_values(values[0]), sha=values[1]),
+                change("update", "deploy/meru.yaml", retire.stopped_marker(marker_file[0]), sha=marker_file[1]),
+            ]
+        except trust.BadLayout as e:
+            raise ApplicationError(str(e), non_retryable=True) from e
+        message = f"retire: stop {app} (D85)\n\nRemoved by its request: no workload, no build runner. Shikigami."
+        await commit_files(self._http, s.gitea_url, token, org, app, message, files)
+        return "written"
+
+    @activity.defn
+    async def retire_wait_stopped(self, app: str) -> str:
+        """Until Argo has synced the repo's current main with no workload left - retried by the workflow (30 s apart).
+        No Application = already parked and gone."""
+        s = self._settings
+        if self._kube is None:
+            raise ApplicationError("no Kubernetes API client (kubernetesApi off?)", non_retryable=True)
+        found = await application(
+            self._kube, s.kubernetes_url, s.kubernetes_dir / "token", s.argocd_namespace, f"app-{app}"
+        )
+        if found is None:
+            return "gone"
+        commit = await head(self._http, s.gitea_url, s.gitea_token.get_secret_value(), s.apps_org, app)
+        reason = not_stopped(found, commit)
+        if reason:
+            raise ApplicationError(f"app-{app} not stopped yet: {reason}")
+        return "stopped"
+
+    @activity.defn
+    async def retire_park_marker(self, app: str) -> str:
+        """deploy/meru.yaml -> deploy/meru.yaml.in (one commit): the ApplicationSet drops the app. Only after
+        retire_wait_stopped."""
+        s = self._settings
+        token, org = s.gitea_token.get_secret_value(), s.apps_org
+        marker_file = await read_file(self._http, s.gitea_url, token, org, app, "deploy/meru.yaml")
+        if marker_file is None:
+            return "kept"
+        try:
+            files = [
+                change("create", "deploy/meru.yaml.in", retire.parked(marker_file[0])),
+                change("delete", "deploy/meru.yaml", sha=marker_file[1]),
+            ]
+        except trust.BadLayout as e:
+            raise ApplicationError(str(e), non_retryable=True) from e
+        message = f"retire: park {app}'s marker (D85)\n\nMeru stops deploying the repo; onboarding again undoes it."
+        await commit_files(self._http, s.gitea_url, token, org, app, message, files)
+        return "parked"
+
+    @activity.defn
+    async def retire_trust(self, app: str) -> str:
+        """Removal PRs for the fence, the key + build exception and the push rule - only this app's entries."""
+        org = self._settings.apps_org
+        fence, exception = f"projects/{app}.yaml", f"exceptions/{app}-build.yaml"
+        try:
+            meru: dict[str, str | None] = {}
+            if await public_file(self._http, self._settings.gitea_url, org, "meru", fence) is not None:
+                kustomization = await self._required(org, "meru", "kustomization.yaml")
+                meru = {fence: None, "kustomization.yaml": trust.without_resource(kustomization, fence)}
+            kyverno: dict[str, str | None] = {}
+            keys = await self._required(org, "kyverno", "keys/meru-signing-keys.yaml")
+            if (fewer := trust.without_key(keys, app)) != keys:
+                kyverno["keys/meru-signing-keys.yaml"] = fewer
+            if await public_file(self._http, self._settings.gitea_url, org, "kyverno", exception) is not None:
+                kustomization = await self._required(org, "kyverno", "kustomization.yaml")
+                kyverno[exception] = None
+                kyverno["kustomization.yaml"] = trust.without_resource(kustomization, exception)
+            config = await self._required(org, "zot", "config.json")
+            zot: dict[str, str | None] = (
+                {"config.json": rule} if (rule := trust.without_push_rule(config, app)) != config else {}
+            )
+        except trust.BadLayout as e:
+            raise ApplicationError(str(e), non_retryable=True) from e
+        return (
+            f"fence {await self._propose(app, 'meru', 'fence', meru, 'retire')}; "
+            f"key {await self._propose(app, 'kyverno', 'signing key', kyverno, 'retire')}; "
+            f"push rule {await self._propose(app, 'zot', 'push rule', zot, 'retire')}"
+        )
+
+    @activity.defn
+    async def retire_runner(self, app: str) -> int:
+        """Remove the repo's runners from Gitea (the runner pod is already gone with build: false)."""
+        s = self._settings
+        return await delete_runners(self._http, s.gitea_url, s.gitea_token.get_secret_value(), s.apps_org, app)
+
+    @activity.defn
+    async def retire_archive(self, app: str) -> bool:
+        """Archive the repo - last: nothing is written to it after this."""
+        s = self._settings
+        return await archive(self._http, s.gitea_url, s.gitea_token.get_secret_value(), s.apps_org, app)
 
     @activity.defn
     async def ensure_deploy_files(self, app: str, owner: str, public_key: str) -> str:
@@ -270,4 +411,19 @@ class BuildActivities:
             return False
         await self._kv.write(path, {"token": await self._runner_token(app)}, cas=entry.version)
         activity.logger.info("made %s", path)
+        return True
+
+    @activity.defn
+    async def revoke_zot_login(self, app: str) -> bool:
+        """The app's line out of Zot's htpasswd (retiring, D85) - an update, which Shikigami may do. Its build entry
+        stays until Charon purges it. Returns whether it changed."""
+        path = "meru/zot/eso/zot-htpasswd"
+        entry = await self._kv.read(path)
+        if entry.data is None or "htpasswd" not in entry.data:
+            raise ApplicationError(f"{path} has no htpasswd field", non_retryable=True)
+        updated = creds.htpasswd_without(entry.data["htpasswd"], creds.builder(app))
+        if updated is None:
+            return False
+        await self._kv.write(path, {**entry.data, "htpasswd": updated}, cas=entry.version)
+        activity.logger.info("%s removed from %s", creds.builder(app), path)
         return True

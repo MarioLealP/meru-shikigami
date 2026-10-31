@@ -22,7 +22,12 @@ from shikigami.workflows import AppWorkflow, OnboardBuild, RequestsSync
 async def run() -> None:
     settings = Settings()  # the secrets come from the environment
     tls = ssl.create_default_context(cafile=settings.openbao_dir / "ca.crt")
-    async with httpx2.AsyncClient(timeout=30) as http, httpx2.AsyncClient(timeout=30, verify=tls) as bao:
+    cluster = ssl.create_default_context(cafile=settings.kubernetes_dir / "ca.crt")
+    async with (
+        httpx2.AsyncClient(timeout=30) as http,
+        httpx2.AsyncClient(timeout=30, verify=tls) as bao,
+        httpx2.AsyncClient(timeout=30, verify=cluster) as kube,
+    ):
 
         def tokens(client_id: str) -> TokenSource:
             password = settings.authentik_password
@@ -31,7 +36,7 @@ async def run() -> None:
         temporal_tokens = tokens(settings.temporal_client_id)
         client = await connect(settings, temporal_tokens)
         await ensure_nightly(client, settings)
-        activities = Activities(settings, http, tokens(settings.thoth_client_id))
+        activities = Activities(settings, http, tokens(settings.thoth_client_id), kube)
         login = KubernetesLogin(bao, settings.openbao_addr, settings.openbao_role, settings.openbao_dir / "token")
         kv = KV(bao, settings.openbao_addr, "apps", login.get)
 
@@ -51,10 +56,17 @@ async def run() -> None:
                 activities.ensure_repo,
                 activities.ensure_trust,
                 activities.ensure_deploy_files,
+                activities.retire_stop,
+                activities.retire_wait_stopped,
+                activities.retire_park_marker,
+                activities.retire_trust,
+                activities.retire_runner,
+                activities.retire_archive,
                 activities.dry_run,
                 build.ensure_build_keys,
                 build.ensure_zot_login,
                 build.ensure_runner_registration,
+                build.revoke_zot_login,
             ],
             max_concurrent_activities=settings.max_concurrent_activities,
         )

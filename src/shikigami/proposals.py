@@ -6,6 +6,7 @@ import asyncio
 import base64
 import os
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 
 import httpx2
@@ -17,13 +18,16 @@ class ProposalFailed(Exception):
     """git refused (the message is git's, never the token: it travels in a header, not the URL)."""
 
 
-async def find_pr(http: httpx2.AsyncClient, gitea_url: str, org: str, repo: str, title: str) -> dict | None:
-    """The newest PR in a public repo with exactly this title, open or closed, or None."""
+async def find_pr(http: httpx2.AsyncClient, gitea_url: str, org: str, repo: str, titles: list[str]) -> dict | None:
+    """The newest PR in a public repo whose title is one of `titles`, open or closed, or None. Asked with both
+    directions' titles ("onboard x: ..." and "retire x: ..."), so after a retire and a restore the newest one
+    decides."""
     response = await http.get(
         f"{gitea_url}/api/v1/repos/{org}/{repo}/pulls", params={"state": "all", "sort": "newest", "limit": 50}
     )
     response.raise_for_status()
-    return next((pr for pr in response.json() if pr["title"] == title), None)
+    matching = [pr for pr in response.json() if pr["title"] in titles]
+    return max(matching, key=lambda pr: pr["number"]) if matching else None
 
 
 async def _git(cwd: Path, *args: str, env: dict[str, str] | None = None) -> None:
@@ -54,20 +58,23 @@ async def open_pr(
     topic: str,
     title: str,
     description: str,
-    files: dict[str, str],
+    files: Mapping[str, str | None],
 ) -> None:
-    """One commit with `files` (path -> full text) on top of the remote's main, pushed as an AGit PR on `topic`. Called
-    only when no PR with this title exists (find_pr): Gitea refuses a different commit on an open topic without
-    force-push, and Shikigami never forces."""
+    """One commit with `files` (path -> full text, or None to delete it) on top of the remote's main, pushed as an AGit
+    PR on `topic`. Called only when no PR with this title exists (find_pr): Gitea refuses a different commit on an
+    open topic without force-push, and Shikigami never forces."""
     auth = base64.b64encode(f"{user}:{token}".encode()).decode()
     with tempfile.TemporaryDirectory(prefix="shikigami-pr-") as tmp:
         work = Path(tmp) / "repo"
         await _git(Path(tmp), "clone", "--quiet", "--depth", "1", "--branch", "main", remote, str(work))
         for path, text in files.items():
             target = work / path
+            if text is None:
+                target.unlink()
+                continue
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text)
-        await _git(work, "add", "--", *files)
+        await _git(work, "add", "--all", "--", *files)
         name, email = AUTHOR
         await _git(work, "-c", f"user.name={name}", "-c", f"user.email={email}", "commit", "--quiet", "-m", title)
         await _git(

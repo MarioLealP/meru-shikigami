@@ -75,7 +75,26 @@ def activities(
         log.append(f"ensure_runner_registration {app}")
         return False
 
+    def retire_step(name: str, result):
+        @activity.defn(name=name)
+        async def step(app: str):
+            log.append(f"{name} {app}")
+            return result
+
+        return step
+
+    retire_steps = [
+        retire_step("retire_stop", "written"),
+        retire_step("retire_wait_stopped", "stopped"),
+        retire_step("retire_park_marker", "parked"),
+        retire_step("retire_trust", "fence proposed; key proposed; push rule proposed"),
+        retire_step("retire_runner", 1),
+        retire_step("revoke_zot_login", True),
+        retire_step("retire_archive", True),
+    ]
+
     return [
+        *retire_steps,
         read_requests,
         read_existing_apps,
         declare_apps,
@@ -171,3 +190,25 @@ async def test_requests_with_problems_declare_nothing(env: WorkflowEnvironment):
     log: list[str] = []
     await run_sync(env.client, snapshot, {}, log)
     assert log == ["read_requests"]
+
+
+async def test_a_removed_request_retires_in_order_and_onboards_nothing(env: WorkflowEnvironment):
+    golem = ECHO.model_copy(
+        update={
+            "metadata": ECHO.metadata.model_copy(update={"name": "golem"}),
+            "spec": ECHO.spec.model_copy(update={"removed": True}),
+        }
+    )
+    snapshot = RequestsSnapshot(commit="c1", apps={"golem": golem}, databases={}, problems=[])
+    log: list[str] = []
+    _, done = await run_sync(env.client, snapshot, {"golem": ExistingApp(key="golem", status="active")}, log)
+    assert [line for line in log if line.startswith(("ensure_", "retire_", "revoke_"))] == [
+        "retire_stop golem",  # stop first ...
+        "retire_wait_stopped golem",  # ... confirmed by Argo before the Application can go
+        "retire_park_marker golem",
+        "retire_trust golem",  # trust once nothing uses it
+        "retire_runner golem",
+        "revoke_zot_login golem",
+        "retire_archive golem",  # nothing is written to the repo after this
+    ]
+    assert done == []  # no dry run: the pass is real
