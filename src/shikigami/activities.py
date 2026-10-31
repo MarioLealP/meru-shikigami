@@ -13,7 +13,7 @@ from shikigami import marker
 from shikigami.config import Settings
 from shikigami.models import AppAction, ExistingApp, RequestsSnapshot
 from shikigami.openbao import KV
-from shikigami.repos import NoTemplate, change, commit_files, ensure_repo, public_file, read_file
+from shikigami.repos import NoTemplate, change, commit_files, ensure_repo, public_file, read_file, run_workflow
 from shikigami.sources import declare_apps, read_existing_apps, read_requests
 from shikigami.tokens import TokenSource
 
@@ -69,7 +69,9 @@ class Activities:
         before them would deploy into nothing."""
         s = self._settings
         token, org = s.gitea_token.get_secret_value(), s.apps_org
-        if await read_file(self._http, s.gitea_url, token, org, app, "deploy/meru.yaml"):
+        # Read like Argo reads it (Meru/meru deploys public repos only), not with the bot's token: the restricted bot
+        # can't see repos it didn't create, and those are exactly the ones that already have a marker.
+        if await public_file(self._http, s.gitea_url, org, app, "deploy/meru.yaml") is not None:
             return "kept"
         if await public_file(self._http, s.gitea_url, org, "meru", f"projects/{app}.yaml") is None:
             return f"waiting: no fence Meru/meru projects/{app}.yaml"
@@ -96,7 +98,12 @@ class Activities:
         )
         await commit_files(self._http, s.gitea_url, token, org, app, message, files)
         activity.logger.info("%s: deploy/meru.yaml written", app)
-        return "written"
+        # The first build: CI ignores deploy/**-only pushes, so the marker commit starts nothing by itself. A retry
+        # after this point finds the marker and stops at "kept" - the build is asked for once; if this call fails,
+        # the app waits on its placeholder digest until someone presses "Run workflow" (the failure is in the history).
+        await run_workflow(self._http, s.gitea_url, token, org, app, "ci.yaml")
+        activity.logger.info("%s: first build started", app)
+        return "written, first build started"
 
     @activity.defn
     async def dry_run(self, action: AppAction) -> None:

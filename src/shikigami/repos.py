@@ -98,3 +98,16 @@ async def commit_files(
         json={"message": message, "files": files},
     )
     response.raise_for_status()
+
+
+async def run_workflow(
+    http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str, workflow: str, ref: str = "main"
+) -> None:
+    """Start a workflow by hand ("Run workflow", workflow_dispatch) - the app's first build: CI skips pushes that
+    only touch deploy/** (its own digest commits), and the marker commit is one."""
+    response = await http.post(
+        f"{gitea_url}/api/v1/repos/{org}/{repo}/actions/workflows/{workflow}/dispatches",
+        headers={"Authorization": f"token {token}"},
+        json={"ref": ref},
+    )
+    response.raise_for_status()
