@@ -38,6 +38,12 @@
           "pattern": "^[1-9][0-9]{0,3}d$",
           "title": "Retention",
           "type": "string"
+        },
+        "removed": {
+          "default": false,
+          "description": "true = retire (D83): purged after the retention.",
+          "title": "Removed",
+          "type": "boolean"
         }
       },
       "required": [
@@ -90,8 +96,35 @@
             }
           ],
           "default": null,
-          "description": "Written by Shikigami's bot after an atlas approval.",
+          "description": "Written by Xolotl after an atlas approval.",
           "title": "Approvedby"
+        },
+        "removedBy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Written by Xolotl when a removal is approved.",
+          "title": "Removedby"
+        },
+        "removedAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Written by Xolotl with removedBy; the retention counts from here.",
+          "title": "Removedat"
         }
       },
       "required": [

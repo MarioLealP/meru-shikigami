@@ -64,6 +64,9 @@ def load(repo: Path) -> Loaded:
     for name, db in databases.items():
         if db.spec.app not in apps:
             problems.append(f"databases/{name}.yaml: spec.app {db.spec.app!r} has no apps/{db.spec.app}.yaml")
+        elif apps[db.spec.app].spec.removed and not db.spec.removed:
+            # its credentials would outlive the app they're for: retire both together
+            problems.append(f"databases/{name}.yaml: its app {db.spec.app!r} is removed, the database isn't")
     for app, count in Counter(db.spec.app for db in databases.values()).items():
         if count > 1:
             problems.append(f"apps/{app}.yaml: {count} databases name it as spec.app - one database per app")

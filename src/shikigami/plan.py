@@ -11,7 +11,9 @@ def plan(apps: dict[str, App], existing: dict[str, ExistingApp]) -> list[AppActi
     for name in sorted(apps):
         spec = apps[name].spec
         current = existing.get(name)
-        if current is None or current.status == "retired":
+        if spec.removed:
+            kind, reason = "retire", "removed by its request (D83)"
+        elif current is None or current.status == "retired":
             kind, reason = "register", "requested, not in Thoth"
         elif current.template != spec.template:
             kind, reason = "update", f"template {current.template!r} -> {spec.template!r}"

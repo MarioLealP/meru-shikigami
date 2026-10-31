@@ -3,8 +3,8 @@ from shikigami.plan import plan
 from shikigami.request_format import App
 
 
-def app(name: str, template: str = "nuwa/python") -> App:
-    spec = {"owner": "mario", "description": "an app", "template": template}
+def app(name: str, template: str = "nuwa/python", removed: bool = False) -> App:
+    spec = {"owner": "mario", "description": "an app", "template": template, "removed": removed}
     return App.model_validate(
         {"apiVersion": "meru.clockmost.com/v1", "kind": "App", "metadata": {"name": name}, "spec": spec}
     )
@@ -48,3 +48,10 @@ def test_app_without_request_is_retired_once():
 def test_retired_app_requested_again_is_registered():
     (action,) = plan({"echo": app("echo")}, {"echo": existing("echo", status="retired")})
     assert action.kind == "register"
+
+
+def test_a_removed_request_retires_its_app_and_keeps_saying_so():
+    for current in ({}, {"golem": existing("golem")}, {"golem": existing("golem", status="decommissioning")}):
+        (action,) = plan({"golem": app("golem", removed=True)}, current)
+        assert (action.kind, action.reasons) == ("retire", ["removed by its request (D83)"])
+        assert action.owner == "mario"  # the retire steps still know whose it was
