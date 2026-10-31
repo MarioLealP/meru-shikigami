@@ -49,6 +49,7 @@ async def run() -> None:
                 activities.read_existing_apps,
                 activities.declare_apps,
                 activities.ensure_repo,
+                activities.ensure_deploy_files,
                 activities.dry_run,
                 build.ensure_build_keys,
                 build.ensure_zot_login,

@@ -9,10 +9,11 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from shikigami import build_creds as creds
+from shikigami import marker
 from shikigami.config import Settings
 from shikigami.models import AppAction, ExistingApp, RequestsSnapshot
 from shikigami.openbao import KV
-from shikigami.repos import NoTemplate, ensure_repo
+from shikigami.repos import NoTemplate, change, commit_files, ensure_repo, public_file, read_file
 from shikigami.sources import declare_apps, read_existing_apps, read_requests
 from shikigami.tokens import TokenSource
 
@@ -58,6 +59,44 @@ class Activities:
                     f"Gitea said {e.response.status_code}: {e.response.text[:500]}", non_retryable=True
                 ) from e
             raise
+
+    @activity.defn
+    async def ensure_deploy_files(self, app: str, owner: str, public_key: str) -> str:
+        """deploy/meru.yaml - the marker that makes Meru deploy the repo (D81) - from the template's
+        deploy/meru.yaml.in with the request's owner, pushed straight to main in one commit with the owner in
+        deploy/values.yaml. Only while the marker is missing: once it exists the repo is the app's, never touched again.
+        Waits (says why, next sync tries again) until the app's fence and its signing key are in place - a marker
+        before them would deploy into nothing."""
+        s = self._settings
+        token, org = s.gitea_token.get_secret_value(), s.apps_org
+        if await read_file(self._http, s.gitea_url, token, org, app, "deploy/meru.yaml"):
+            return "kept"
+        if await public_file(self._http, s.gitea_url, org, "meru", f"projects/{app}.yaml") is None:
+            return f"waiting: no fence Meru/meru projects/{app}.yaml"
+        keys = await public_file(self._http, s.gitea_url, org, "kyverno", "keys/meru-signing-keys.yaml")
+        if keys is None or not marker.key_trusted(keys, app, public_key):
+            return f"waiting: Meru/kyverno doesn't trust {app}'s signing key yet"
+        template = await read_file(self._http, s.gitea_url, token, org, app, "deploy/meru.yaml.in")
+        if template is None:
+            return "waiting: no deploy/meru.yaml.in (repo generated before the template had it)"
+        values = await read_file(self._http, s.gitea_url, token, org, app, "deploy/values.yaml")
+        try:
+            files = [
+                change("create", "deploy/meru.yaml", marker.with_owner(template[0], owner, "deploy/meru.yaml.in")),
+                change("delete", "deploy/meru.yaml.in", sha=template[1]),
+            ]
+            if values and marker.owner_unset(values[0]):
+                filled = marker.with_owner(values[0], owner, "deploy/values.yaml")
+                files.append(change("update", "deploy/values.yaml", filled, sha=values[1]))
+        except marker.BadTemplate as e:
+            raise ApplicationError(str(e), non_retryable=True) from e
+        message = (
+            f"deploy: {app} is a Meru app (owner {owner})\n\n"
+            "Written by Shikigami (D81): fence, signing key and build credentials are in place."
+        )
+        await commit_files(self._http, s.gitea_url, token, org, app, message, files)
+        activity.logger.info("%s: deploy/meru.yaml written", app)
+        return "written"
 
     @activity.defn
     async def dry_run(self, action: AppAction) -> None:

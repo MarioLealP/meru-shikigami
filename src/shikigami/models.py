@@ -34,3 +34,4 @@ class AppAction(BaseModel):
     reasons: list[str]
     template: str | None = None  # requested apps only
     description: str | None = None
+    owner: str | None = None
