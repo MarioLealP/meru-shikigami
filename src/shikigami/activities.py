@@ -69,7 +69,9 @@ class Activities:
         before them would deploy into nothing."""
         s = self._settings
         token, org = s.gitea_token.get_secret_value(), s.apps_org
-        if await read_file(self._http, s.gitea_url, token, org, app, "deploy/meru.yaml"):
+        # Read like Argo reads it (Meru/meru deploys public repos only), not with the bot's token: the restricted bot
+        # can't see repos it didn't create, and those are exactly the ones that already have a marker.
+        if await public_file(self._http, s.gitea_url, org, app, "deploy/meru.yaml") is not None:
             return "kept"
         if await public_file(self._http, s.gitea_url, org, "meru", f"projects/{app}.yaml") is None:
             return f"waiting: no fence Meru/meru projects/{app}.yaml"

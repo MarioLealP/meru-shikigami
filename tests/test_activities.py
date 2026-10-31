@@ -60,7 +60,7 @@ SIGNING_KEYS = "data:\n  echo: |\n    -----BEGIN PUBLIC KEY-----\n    AAAA\n    
 PUBLIC_KEY = "-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\n"
 
 
-def gitea(files: dict[str, str], public: dict[str, str], commits: list[dict]) -> Activities:
+def gitea(files: dict[str, str], public: dict[str, str], commits: list[dict], hidden: bool = False) -> Activities:
     """A Gitea with Meru/echo's files (token reads), public repo files (anonymous raw reads) and a commit endpoint."""
 
     def handler(request: httpx2.Request) -> httpx2.Response:
@@ -70,6 +70,8 @@ def gitea(files: dict[str, str], public: dict[str, str], commits: list[dict]) ->
             return httpx2.Response(201, json={})
         if path.startswith("/api/v1/repos/Meru/echo/contents/"):
             assert request.headers["authorization"] == "token tok"
+            if hidden:  # a repo the restricted bot wasn't added to
+                return httpx2.Response(403, json={})
             name = path.removeprefix("/api/v1/repos/Meru/echo/contents/")
             if name not in files:
                 return httpx2.Response(404, json={})
@@ -90,10 +92,10 @@ def gitea(files: dict[str, str], public: dict[str, str], commits: list[dict]) ->
 READY = {"meru/raw/projects/echo.yaml": "kind: AppProject\n", "kyverno/raw/keys/meru-signing-keys.yaml": SIGNING_KEYS}
 
 
-async def deploy(files: dict[str, str], public: dict[str, str]) -> tuple[str, list[dict]]:
+async def deploy(files: dict[str, str], public: dict[str, str], hidden: bool = False) -> tuple[str, list[dict]]:
     commits: list[dict] = []
     result = await ActivityEnvironment().run(
-        gitea(files, public, commits).ensure_deploy_files, "echo", "mario", PUBLIC_KEY
+        gitea(files, public, commits, hidden).ensure_deploy_files, "echo", "mario", PUBLIC_KEY
     )
     return result, commits
 
@@ -114,7 +116,13 @@ async def test_writes_the_marker_in_one_commit_once_everything_is_ready():
 
 
 async def test_an_existing_marker_is_never_touched():
-    assert await deploy({"deploy/meru.yaml": "owner: someone\n"}, READY) == ("kept", [])
+    assert await deploy({}, {**READY, "echo/raw/deploy/meru.yaml": "owner: someone\n"}) == ("kept", [])
+
+
+async def test_a_marker_in_a_repo_the_bot_cant_see_still_counts():
+    # thoth / shikigami: the restricted bot isn't a collaborator, its token gets 403 - the anonymous read decides
+    files = {"deploy/meru.yaml.in": TEMPLATE_IN}
+    assert await deploy(files, {**READY, "echo/raw/deploy/meru.yaml": "owner: mario\n"}, hidden=True) == ("kept", [])
 
 
 @pytest.mark.parametrize(
