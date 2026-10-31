@@ -1,5 +1,6 @@
 import base64
 import json
+from pathlib import Path
 
 import httpx2
 import pytest
@@ -160,6 +161,7 @@ TRUST_REPOS = {
     "meru/raw/kustomization.yaml": "resources:\n  - projects/echo.yaml\n  - appsets/meru-apps.yaml\n",
     "kyverno/raw/kustomization.yaml": "resources:\n  - keys/meru-signing-keys.yaml\n  - exceptions/echo-build.yaml\n",
     "kyverno/raw/keys/meru-signing-keys.yaml": SIGNING_KEYS,
+    "zot/raw/config.json": (Path(__file__).parent / "fixtures" / "zot-config.json").read_text(),
 }
 
 
@@ -192,8 +194,10 @@ async def onboard_trust(
 
 
 async def test_a_new_app_gets_one_pr_per_trust_repo(monkeypatch: pytest.MonkeyPatch):
-    result, [fence, keys] = await onboard_trust(monkeypatch, TRUST_REPOS, {})
-    assert result == "fence proposed in Meru/meru; key proposed in Meru/kyverno"
+    result, [fence, keys, push] = await onboard_trust(monkeypatch, TRUST_REPOS, {})
+    assert result == "fence proposed in Meru/meru; key proposed in Meru/kyverno; push rule proposed in Meru/zot"
+    assert (push["remote"], push["title"]) == ("https://git.test/Meru/zot.git", "onboard golem: push rule")
+    assert '"golem-builder"' in push["files"]["config.json"]
     assert (fence["remote"], fence["user"], fence["topic"]) == (
         "https://git.test/Meru/meru.git",
         "shikigami",
@@ -216,7 +220,7 @@ async def test_an_app_already_trusted_is_kept_without_a_pr(monkeypatch: pytest.M
         "kyverno/raw/exceptions/echo-build.yaml": "x",
     }
     result, opened = await onboard_trust(monkeypatch, public, {}, app="echo", key=PUBLIC_KEY)
-    assert (result, opened) == ("fence kept; key kept", [])
+    assert (result, opened) == ("fence kept; key kept; push rule kept", [])
 
 
 async def test_an_open_or_rejected_pr_is_never_proposed_again(monkeypatch: pytest.MonkeyPatch):
@@ -225,14 +229,18 @@ async def test_an_open_or_rejected_pr_is_never_proposed_again(monkeypatch: pytes
         "kyverno": [{"number": 2, "title": "onboard golem: signing key", "state": "closed", "merged": False}],
     }
     result, opened = await onboard_trust(monkeypatch, TRUST_REPOS, pulls)
-    assert result == "fence waiting on Meru/meru#4; key Meru/kyverno#2 was closed unmerged - not proposed again"
-    assert opened == []
+    assert result.startswith(
+        "fence waiting on Meru/meru#4; key Meru/kyverno#2 was closed unmerged - not proposed again; push rule proposed"
+    )
+    assert [pr["title"] for pr in opened] == ["onboard golem: push rule"]
 
 
 async def test_another_key_for_the_app_is_never_swapped_in(monkeypatch: pytest.MonkeyPatch):
     public = {**TRUST_REPOS, "meru/raw/projects/echo.yaml": "kind: AppProject\n"}
     result, opened = await onboard_trust(monkeypatch, public, {}, app="echo", key=GOLEM_KEY)
-    assert result == "fence kept; key waiting: Meru/kyverno already trusts another key for echo - by hand"
+    assert result == (
+        "fence kept; key waiting: Meru/kyverno already trusts another key for echo - by hand; push rule kept"
+    )
     assert opened == []
 
 

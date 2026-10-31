@@ -71,38 +71,57 @@ class Activities:
 
     @activity.defn
     async def ensure_trust(self, app: str, description: str, public_key: str) -> str:
-        """The app's fence (Meru/meru) and its signing key + build exception (Meru/kyverno), proposed as PRs (D82) -
-        Shikigami only reads those repos. Each repo: kept if the app is already there, else one PR, never a second one
-        while a PR with the same title exists (open, merged, or closed unmerged - a rejection isn't re-proposed)."""
-        s = self._settings
-        org = s.apps_org
-        fence_path, exception_path = f"projects/{app}.yaml", f"exceptions/{app}-build.yaml"
+        """The app's fence (Meru/meru), its signing key + build exception (Meru/kyverno) and its push rule (Meru/zot),
+        proposed as PRs (D82) - Shikigami only reads those repos. Each repo: kept if the app is already there, else one
+        PR, never a second one while a PR with the same title exists (open, merged, or closed unmerged - a rejection
+        isn't re-proposed). Another entry already there for the app is left for a person."""
         try:
-            fence: dict[str, str] = {}
-            if await public_file(self._http, s.gitea_url, org, "meru", fence_path) is None:
-                kustomization = await self._required(org, "meru", "kustomization.yaml")
-                fence = {
-                    fence_path: trust.fence(app, description),
-                    "kustomization.yaml": trust.with_resource(kustomization, "projects", fence_path),
-                }
-            keys: dict[str, str] = {}
-            current = await self._required(org, "kyverno", "keys/meru-signing-keys.yaml")
-            try:
-                updated = trust.with_key(current, app, public_key)
-            except trust.KeyConflict as e:
-                return f"fence {await self._propose(app, 'meru', 'fence', fence)}; key waiting: {e} - by hand"
-            if updated != current:
-                keys["keys/meru-signing-keys.yaml"] = updated
-            if await public_file(self._http, s.gitea_url, org, "kyverno", exception_path) is None:
-                kustomization = await self._required(org, "kyverno", "kustomization.yaml")
-                keys[exception_path] = trust.build_exception(app)
-                keys["kustomization.yaml"] = trust.with_resource(kustomization, "exceptions", exception_path)
+            changes = [
+                ("fence", "meru", "fence", await self._fence_files(app, description)),
+                ("key", "kyverno", "signing key", await self._key_files(app, public_key)),
+                ("push rule", "zot", "push rule", await self._push_rule_files(app)),
+            ]
         except trust.BadLayout as e:
             raise ApplicationError(str(e), non_retryable=True) from e
-        return (
-            f"fence {await self._propose(app, 'meru', 'fence', fence)}; "
-            f"key {await self._propose(app, 'kyverno', 'signing key', keys)}"
-        )
+        parts = []
+        for label, repo, what, files in changes:
+            if isinstance(files, trust.Conflict):
+                parts.append(f"{label} waiting: {files} - by hand")
+            else:
+                parts.append(f"{label} {await self._propose(app, repo, what, files)}")
+        return "; ".join(parts)
+
+    async def _fence_files(self, app: str, description: str) -> dict[str, str]:
+        org, path = self._settings.apps_org, f"projects/{app}.yaml"
+        if await public_file(self._http, self._settings.gitea_url, org, "meru", path) is not None:
+            return {}
+        kustomization = await self._required(org, "meru", "kustomization.yaml")
+        return {
+            path: trust.fence(app, description),
+            "kustomization.yaml": trust.with_resource(kustomization, "projects", path),
+        }
+
+    async def _key_files(self, app: str, public_key: str) -> dict[str, str] | trust.Conflict:
+        org, exception = self._settings.apps_org, f"exceptions/{app}-build.yaml"
+        current = await self._required(org, "kyverno", "keys/meru-signing-keys.yaml")
+        try:
+            updated = trust.with_key(current, app, public_key)
+        except trust.Conflict as e:
+            return e
+        files = {"keys/meru-signing-keys.yaml": updated} if updated != current else {}
+        if await public_file(self._http, self._settings.gitea_url, org, "kyverno", exception) is None:
+            kustomization = await self._required(org, "kyverno", "kustomization.yaml")
+            files[exception] = trust.build_exception(app)
+            files["kustomization.yaml"] = trust.with_resource(kustomization, "exceptions", exception)
+        return files
+
+    async def _push_rule_files(self, app: str) -> dict[str, str] | trust.Conflict:
+        current = await self._required(self._settings.apps_org, "zot", "config.json")
+        try:
+            updated = trust.with_push_rule(current, app)
+        except trust.Conflict as e:
+            return e
+        return {"config.json": updated} if updated != current else {}
 
     async def _required(self, org: str, repo: str, path: str) -> str:
         text = await public_file(self._http, self._settings.gitea_url, org, repo, path)

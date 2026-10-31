@@ -1,0 +1,197 @@
+{
+  "distSpecVersion": "1.1.1",
+  "storage": {
+    "rootDirectory": "/var/lib/registry",
+    "gc": true,
+    "dedupe": true,
+    "gcDelay": "2h",
+    "gcInterval": "24h",
+    "retention": {
+      "dryRun": false,
+      "delay": "24h",
+      "policies": [
+        {
+          "repositories": [
+            "docker.io/**",
+            "ghcr.io/**",
+            "quay.io/**"
+          ],
+          "deleteReferrers": true,
+          "deleteUntagged": true,
+          "keepTags": [
+            {
+              "mostRecentlyPulledCount": 3,
+              "pulledWithin": "2160h"
+            }
+          ]
+        },
+        {
+          "repositories": [
+            "**"
+          ],
+          "deleteReferrers": false,
+          "deleteUntagged": true,
+          "keepTags": [
+            {
+              "mostRecentlyPushedCount": 10,
+              "pulledWithin": "720h"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "http": {
+    "address": "0.0.0.0",
+    "port": "5000",
+    "compat": [
+      "docker2s2"
+    ],
+    "auth": {
+      "htpasswd": {
+        "path": "/etc/zot/auth/htpasswd"
+      }
+    },
+    "accessControl": {
+      "repositories": {
+        "**": {
+          "anonymousPolicy": [
+            "read"
+          ],
+          "defaultPolicy": [
+            "read"
+          ]
+        },
+        "meru/echo": {
+          "anonymousPolicy": [
+            "read"
+          ],
+          "defaultPolicy": [
+            "read"
+          ],
+          "policies": [
+            {
+              "users": [
+                "echo-builder"
+              ],
+              "actions": [
+                "read",
+                "create",
+                "update"
+              ]
+            }
+          ]
+        },
+        "meru/thoth": {
+          "anonymousPolicy": [
+            "read"
+          ],
+          "defaultPolicy": [
+            "read"
+          ],
+          "policies": [
+            {
+              "users": [
+                "thoth-builder"
+              ],
+              "actions": [
+                "read",
+                "create",
+                "update"
+              ]
+            }
+          ]
+        },
+        "meru/shikigami": {
+          "anonymousPolicy": [
+            "read"
+          ],
+          "defaultPolicy": [
+            "read"
+          ],
+          "policies": [
+            {
+              "users": [
+                "shikigami-builder"
+              ],
+              "actions": [
+                "read",
+                "create",
+                "update"
+              ]
+            }
+          ]
+        }
+      },
+      "adminPolicy": {
+        "users": [
+          "admin"
+        ],
+        "actions": [
+          "read",
+          "create",
+          "update",
+          "delete"
+        ]
+      }
+    }
+  },
+  "log": {
+    "level": "info"
+  },
+  "extensions": {
+    "sync": {
+      "enable": true,
+      "registries": [
+        {
+          "urls": [
+            "https://registry-1.docker.io"
+          ],
+          "onDemand": true,
+          "tlsVerify": true,
+          "content": [
+            {
+              "prefix": "**",
+              "destination": "/docker.io"
+            }
+          ]
+        },
+        {
+          "urls": [
+            "https://ghcr.io"
+          ],
+          "onDemand": true,
+          "tlsVerify": true,
+          "content": [
+            {
+              "prefix": "**",
+              "destination": "/ghcr.io"
+            }
+          ]
+        },
+        {
+          "urls": [
+            "https://quay.io"
+          ],
+          "onDemand": true,
+          "tlsVerify": true,
+          "content": [
+            {
+              "prefix": "**",
+              "destination": "/quay.io"
+            }
+          ]
+        }
+      ]
+    },
+    "search": {
+      "enable": true,
+      "cve": {
+        "updateInterval": "24h"
+      }
+    },
+    "ui": {
+      "enable": true
+    }
+  }
+}

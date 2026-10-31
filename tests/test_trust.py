@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -74,10 +75,37 @@ def test_a_key_is_added_and_the_file_keeps_its_comments():
 def test_the_same_key_is_kept_and_another_one_is_never_swapped_in():
     added = trust.with_key(KEYS, "golem", KEY)
     assert trust.with_key(added, "golem", KEY) == added
-    with pytest.raises(trust.KeyConflict):
+    with pytest.raises(trust.Conflict):
         trust.with_key(KEYS, "echo", KEY)
 
 
 def test_a_section_after_data_is_a_bad_layout():
     with pytest.raises(trust.BadLayout):
         trust.with_key(KEYS + "binaryData: {}\n", "golem", KEY)
+
+
+ZOT_CONFIG = (FIXTURES / "zot-config.json").read_text()  # Meru/zot's real config.json
+
+
+def test_a_push_rule_is_added_and_nothing_else_in_zots_config_changes():
+    added = trust.with_push_rule(ZOT_CONFIG, "golem")
+    before, after = json.loads(ZOT_CONFIG), json.loads(added)
+    rule = after["http"]["accessControl"]["repositories"].pop("meru/golem")
+    assert after == before
+    assert rule == before["http"]["accessControl"]["repositories"]["meru/echo"] | {
+        "policies": [{"users": ["golem-builder"], "actions": ["read", "create", "update"]}]
+    }
+    # the diff a person reviews is only the new block
+    assert set(ZOT_CONFIG.splitlines()) <= set(added.splitlines())
+
+
+def test_the_same_push_rule_is_kept_and_another_one_is_never_replaced():
+    assert trust.with_push_rule(ZOT_CONFIG, "echo") == ZOT_CONFIG
+    changed = ZOT_CONFIG.replace('"echo-builder"', '"someone-else"')
+    with pytest.raises(trust.Conflict):
+        trust.with_push_rule(changed, "echo")
+
+
+def test_a_zot_config_in_another_layout_is_left_for_a_person():
+    with pytest.raises(trust.BadLayout):
+        trust.with_push_rule(json.dumps(json.loads(ZOT_CONFIG)), "golem")
