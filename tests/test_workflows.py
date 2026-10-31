@@ -41,11 +41,16 @@ def activities(
         log.append(f"declare_apps {sorted(declared.apps)}")
         return {"created": len(declared.apps)}
 
+    @activity.defn(name="ensure_repo")
+    async def ensure_repo(app: str, template: str, description: str) -> bool:
+        log.append(f"ensure_repo {app} {template}")
+        return app not in existing
+
     @activity.defn(name="dry_run")
     async def dry_run(action: AppAction) -> None:
         done.append(action)
 
-    return [read_requests, read_existing_apps, declare_apps, dry_run]
+    return [read_requests, read_existing_apps, declare_apps, ensure_repo, dry_run]
 
 
 @pytest.fixture
@@ -88,8 +93,19 @@ async def test_declares_after_planning_against_what_thoth_had(env: WorkflowEnvir
     snapshot = RequestsSnapshot(commit="c1", apps={"echo": ECHO}, databases={}, problems=[])
     log: list[str] = []
     result, _ = await run_sync(env.client, snapshot, {}, log)
-    assert log == ["read_requests", "read_existing_apps", "declare_apps ['echo']"]
+    assert log[:3] == ["read_requests", "read_existing_apps", "declare_apps ['echo']"]
     assert [(a.app, a.kind) for a in result] == [("echo", "register")]
+
+
+async def test_every_requested_app_ensures_its_repo_and_retiring_touches_nothing(env: WorkflowEnvironment):
+    snapshot = RequestsSnapshot(commit="c1", apps={"echo": ECHO}, databases={}, problems=[])
+    known = ExistingApp(key="echo", status="active", template="nuwa/python")
+    gone = ExistingApp(key="old", status="active", template="nuwa/python")
+    log: list[str] = []
+    result, done = await run_sync(env.client, snapshot, {"echo": known, "old": gone}, log)
+    assert [(a.app, a.kind) for a in result] == [("echo", "check"), ("old", "retire")]
+    assert [line for line in log if line.startswith("ensure_repo")] == ["ensure_repo echo nuwa/python"]
+    assert sorted(a.app for a in done) == ["echo", "old"]
 
 
 async def test_requests_with_problems_declare_nothing(env: WorkflowEnvironment):

@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     # Where requests come from (D35) and what exists (Thoth).
     gitea_url: str = "https://git.clockmost.com"
     requests_repo: str = "Meru/requests"
+    apps_org: str = "Meru"  # where app repos and their templates live (D76)
     requests_branch: str = "main"
     gitea_token: SecretStr
     thoth_url: str = "http://thoth.thoth.svc"
