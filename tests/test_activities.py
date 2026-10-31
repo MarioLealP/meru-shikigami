@@ -68,6 +68,9 @@ def gitea(files: dict[str, str], public: dict[str, str], commits: list[dict], hi
         if request.method == "POST" and path == "/api/v1/repos/Meru/echo/contents":
             commits.append(json.loads(request.content))
             return httpx2.Response(201, json={})
+        if request.method == "POST" and path == "/api/v1/repos/Meru/echo/actions/workflows/ci.yaml/dispatches":
+            commits.append({"dispatch": json.loads(request.content)})
+            return httpx2.Response(204)
         if path.startswith("/api/v1/repos/Meru/echo/contents/"):
             assert request.headers["authorization"] == "token tok"
             if hidden:  # a repo the restricted bot wasn't added to
@@ -101,8 +104,9 @@ async def deploy(files: dict[str, str], public: dict[str, str], hidden: bool = F
 
 
 async def test_writes_the_marker_in_one_commit_once_everything_is_ready():
-    result, [commit] = await deploy({"deploy/meru.yaml.in": TEMPLATE_IN, "deploy/values.yaml": VALUES}, READY)
-    assert result == "written"
+    result, [commit, dispatch] = await deploy({"deploy/meru.yaml.in": TEMPLATE_IN, "deploy/values.yaml": VALUES}, READY)
+    assert result == "written, first build started"
+    assert dispatch == {"dispatch": {"ref": "main"}}  # after the commit: CI skips deploy/**-only pushes
     ops = {f["path"]: f for f in commit["files"]}
     assert ops["deploy/meru.yaml"]["operation"] == "create"
     assert base64.b64decode(ops["deploy/meru.yaml"]["content"]).decode().startswith("owner: mario\n")

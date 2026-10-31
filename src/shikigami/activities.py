@@ -13,7 +13,7 @@ from shikigami import marker
 from shikigami.config import Settings
 from shikigami.models import AppAction, ExistingApp, RequestsSnapshot
 from shikigami.openbao import KV
-from shikigami.repos import NoTemplate, change, commit_files, ensure_repo, public_file, read_file
+from shikigami.repos import NoTemplate, change, commit_files, ensure_repo, public_file, read_file, run_workflow
 from shikigami.sources import declare_apps, read_existing_apps, read_requests
 from shikigami.tokens import TokenSource
 
@@ -98,7 +98,12 @@ class Activities:
         )
         await commit_files(self._http, s.gitea_url, token, org, app, message, files)
         activity.logger.info("%s: deploy/meru.yaml written", app)
-        return "written"
+        # The first build: CI ignores deploy/**-only pushes, so the marker commit starts nothing by itself. A retry
+        # after this point finds the marker and stops at "kept" - the build is asked for once; if this call fails,
+        # the app waits on its placeholder digest until someone presses "Run workflow" (the failure is in the history).
+        await run_workflow(self._http, s.gitea_url, token, org, app, "ci.yaml")
+        activity.logger.info("%s: first build started", app)
+        return "written, first build started"
 
     @activity.defn
     async def dry_run(self, action: AppAction) -> None:
