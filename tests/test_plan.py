@@ -19,8 +19,19 @@ def test_new_requests_are_registered_in_name_order():
     assert [(a.app, a.kind) for a in actions] == [("echo", "register"), ("thoth", "register")]
 
 
-def test_unchanged_app_needs_nothing():
-    assert plan({"echo": app("echo")}, {"echo": existing("echo")}) == []
+def test_unchanged_app_is_still_checked():
+    (action,) = plan({"echo": app("echo")}, {"echo": existing("echo")})
+    assert action.kind == "check"
+
+
+def test_requested_apps_carry_what_their_steps_need():
+    (action,) = plan({"echo": app("echo", "nuwa/go")}, {})
+    assert (action.template, action.description) == ("nuwa/go", "an app")
+
+
+def test_retired_apps_carry_no_template():
+    (action,) = plan({}, {"old": existing("old")})
+    assert action.template is None
 
 
 def test_changed_template_is_an_update():

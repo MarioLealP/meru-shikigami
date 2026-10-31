@@ -36,6 +36,7 @@ async def run() -> None:
                 activities.read_requests,
                 activities.read_existing_apps,
                 activities.declare_apps,
+                activities.ensure_repo,
                 activities.dry_run,
             ],
             max_concurrent_activities=settings.max_concurrent_activities,

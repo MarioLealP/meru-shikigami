@@ -61,7 +61,7 @@ class Activities:
 
     @activity.defn
     async def dry_run(self, action: AppAction) -> None:
-        """Step 3 stops here: say what would happen. Later steps replace this with the real work, step by step."""
+        """The steps not built yet: say what would happen. Each real step takes its place, one by one."""
         activity.logger.info("would %s app %s: %s", action.kind, action.app, "; ".join(action.reasons))
 
 

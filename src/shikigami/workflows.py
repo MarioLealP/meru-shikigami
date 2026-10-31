@@ -20,10 +20,19 @@ RETRY = RetryPolicy(maximum_attempts=5)  # then the run fails and the next ping 
 
 @workflow.defn
 class AppWorkflow:
-    """One app's step, as a child of requests-sync, so many apps run side by side and fail apart (D75)."""
+    """One app's pass, as a child of requests-sync, so many apps run side by side and fail apart (D75). Requested apps
+    walk their steps in order, each keeping what exists (D78); retiring stays a dry run (only Anubis retires, D53)."""
 
     @workflow.run
     async def run(self, action: AppAction) -> None:
+        if action.kind != "retire" and action.template and action.description:
+            created = await workflow.execute_activity_method(
+                Activities.ensure_repo,
+                args=[action.app, action.template, action.description],
+                start_to_close_timeout=TIMEOUT,
+                retry_policy=RETRY,
+            )
+            workflow.logger.info("app %s: repo %s", action.app, "created" if created else "kept")
         await workflow.execute_activity_method(
             Activities.dry_run, action, start_to_close_timeout=TIMEOUT, retry_policy=RETRY
         )
