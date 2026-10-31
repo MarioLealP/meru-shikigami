@@ -1,0 +1,17 @@
+apiVersion: policies.kyverno.io/v1
+kind: PolicyException
+metadata:
+  name: echo-build
+  namespace: kyverno
+  annotations:
+    meru.clockmost.com/reason: >-
+      Echo's build namespace (D32). Its job pods run rootless BuildKit, which needs privilege escalation, SETUID/SETGID,
+      SELinux container_engine_t and a custom seccomp profile - Pod Security "baseline", not "restricted". The app
+      itself runs in namespace echo, which stays restricted. Every other rule still applies.
+spec:
+  policyRefs:
+    - name: require-restricted-namespaces
+      kind: ValidatingPolicy
+  matchConditions:
+    - name: echo-build-namespace-only
+      expression: "object.metadata.name == 'echo-build'"

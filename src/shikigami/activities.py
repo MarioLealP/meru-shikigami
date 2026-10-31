@@ -9,13 +9,22 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from shikigami import build_creds as creds
-from shikigami import marker
+from shikigami import marker, trust
 from shikigami.config import Settings
 from shikigami.models import AppAction, ExistingApp, RequestsSnapshot
 from shikigami.openbao import KV
+from shikigami.proposals import ProposalFailed, find_pr, open_pr
 from shikigami.repos import NoTemplate, change, commit_files, ensure_repo, public_file, read_file, run_workflow
 from shikigami.sources import declare_apps, read_existing_apps, read_requests
 from shikigami.tokens import TokenSource
+
+PROPOSAL = """Shikigami's onboarding of `{app}` (D82): its {what}, derived - the request picks none of it.
+
+{files}
+
+Shikigami only reads this repo, so this is a proposal. It's merged by Xolotl once the request is approved on
+Meru/requests and this PR only adds `{app}`; until Xolotl exists, by Mario. Closing it unmerged stops Shikigami
+proposing it again."""
 
 
 class Activities:
@@ -59,6 +68,74 @@ class Activities:
                     f"Gitea said {e.response.status_code}: {e.response.text[:500]}", non_retryable=True
                 ) from e
             raise
+
+    @activity.defn
+    async def ensure_trust(self, app: str, description: str, public_key: str) -> str:
+        """The app's fence (Meru/meru) and its signing key + build exception (Meru/kyverno), proposed as PRs (D82) -
+        Shikigami only reads those repos. Each repo: kept if the app is already there, else one PR, never a second one
+        while a PR with the same title exists (open, merged, or closed unmerged - a rejection isn't re-proposed)."""
+        s = self._settings
+        org = s.apps_org
+        fence_path, exception_path = f"projects/{app}.yaml", f"exceptions/{app}-build.yaml"
+        try:
+            fence: dict[str, str] = {}
+            if await public_file(self._http, s.gitea_url, org, "meru", fence_path) is None:
+                kustomization = await self._required(org, "meru", "kustomization.yaml")
+                fence = {
+                    fence_path: trust.fence(app, description),
+                    "kustomization.yaml": trust.with_resource(kustomization, "projects", fence_path),
+                }
+            keys: dict[str, str] = {}
+            current = await self._required(org, "kyverno", "keys/meru-signing-keys.yaml")
+            try:
+                updated = trust.with_key(current, app, public_key)
+            except trust.KeyConflict as e:
+                return f"fence {await self._propose(app, 'meru', 'fence', fence)}; key waiting: {e} - by hand"
+            if updated != current:
+                keys["keys/meru-signing-keys.yaml"] = updated
+            if await public_file(self._http, s.gitea_url, org, "kyverno", exception_path) is None:
+                kustomization = await self._required(org, "kyverno", "kustomization.yaml")
+                keys[exception_path] = trust.build_exception(app)
+                keys["kustomization.yaml"] = trust.with_resource(kustomization, "exceptions", exception_path)
+        except trust.BadLayout as e:
+            raise ApplicationError(str(e), non_retryable=True) from e
+        return (
+            f"fence {await self._propose(app, 'meru', 'fence', fence)}; "
+            f"key {await self._propose(app, 'kyverno', 'signing key', keys)}"
+        )
+
+    async def _required(self, org: str, repo: str, path: str) -> str:
+        text = await public_file(self._http, self._settings.gitea_url, org, repo, path)
+        if text is None:
+            raise trust.BadLayout(f"{org}/{repo} has no {path}")
+        return text
+
+    async def _propose(self, app: str, repo: str, what: str, files: dict[str, str]) -> str:
+        if not files:
+            return "kept"
+        s = self._settings
+        where, title = f"{s.apps_org}/{repo}", f"onboard {app}: {what}"
+        pr = await find_pr(self._http, s.gitea_url, s.apps_org, repo, title)
+        if pr is not None:
+            if pr["state"] == "open":
+                return f"waiting on {where}#{pr['number']}"
+            if pr.get("merged"):
+                return f"{where}#{pr['number']} merged, not on main yet"
+            return f"{where}#{pr['number']} was closed unmerged - not proposed again"
+        try:
+            await open_pr(
+                f"{s.gitea_url}/{where}.git",
+                s.gitea_user,
+                s.gitea_token.get_secret_value(),
+                f"onboard-{app}",
+                title,
+                PROPOSAL.format(app=app, what=what, files="\n".join(f"- `{path}`" for path in files)),
+                files,
+            )
+        except ProposalFailed as e:
+            raise ApplicationError(str(e)) from e  # retried: a push can fail on the network too
+        activity.logger.info("%s: %s proposed in %s", app, what, where)
+        return f"proposed in {where}"
 
     @activity.defn
     async def ensure_deploy_files(self, app: str, owner: str, public_key: str) -> str:
