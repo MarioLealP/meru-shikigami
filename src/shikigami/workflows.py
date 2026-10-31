@@ -78,7 +78,13 @@ class RequestsSync:
                     Activities.read_existing_apps, start_to_close_timeout=TIMEOUT, retry_policy=RETRY
                 )
                 actions = plan(snapshot.apps, existing)
-                workflow.logger.info("requests at %s: %d app step(s)", snapshot.commit, len(actions))
+                # Planned against what Thoth had; then declare the whole request picture before the apps' steps run.
+                summary = await workflow.execute_activity_method(
+                    Activities.declare_apps, snapshot, start_to_close_timeout=TIMEOUT, retry_policy=RETRY
+                )
+                workflow.logger.info(
+                    "requests at %s: %d app step(s); Thoth: %s", snapshot.commit, len(actions), summary
+                )
                 await asyncio.gather(*(self._start_app(a) for a in actions))
             if not self._poked:
                 return actions

@@ -12,7 +12,7 @@ from shikigami import build_creds as creds
 from shikigami.config import Settings
 from shikigami.models import AppAction, ExistingApp, RequestsSnapshot
 from shikigami.openbao import KV
-from shikigami.sources import read_existing_apps, read_requests
+from shikigami.sources import declare_apps, read_existing_apps, read_requests
 from shikigami.tokens import TokenSource
 
 
@@ -30,6 +30,17 @@ class Activities:
     @activity.defn
     async def read_existing_apps(self) -> dict[str, ExistingApp]:
         return await read_existing_apps(self._http, self._settings.thoth_url, await self._thoth_tokens.get())
+
+    @activity.defn
+    async def declare_apps(self, snapshot: RequestsSnapshot) -> dict:
+        try:
+            return await declare_apps(self._http, self._settings.thoth_url, await self._thoth_tokens.get(), snapshot)
+        except httpx2.HTTPStatusError as e:
+            if e.response.status_code in (403, 422):  # no permission, or Thoth refused the snapshot: retries won't help
+                raise ApplicationError(
+                    f"Thoth said {e.response.status_code}: {e.response.text[:500]}", non_retryable=True
+                ) from e
+            raise
 
     @activity.defn
     async def dry_run(self, action: AppAction) -> None:

@@ -37,3 +37,19 @@ async def read_existing_apps(http: httpx2.AsyncClient, thoth_url: str, token: st
         item["key"]: ExistingApp(key=item["key"], status=item["status"], template=item["attributes"].get("template"))
         for item in response.json()
     }
+
+
+async def declare_apps(http: httpx2.AsyncClient, thoth_url: str, token: str, snapshot: RequestsSnapshot) -> dict:
+    """Every requested app, as one Thoth snapshot (D52): Shikigami declares, Thoth keeps them `planned` until a scanner
+    sees them, and only Anubis retires (D53). The scan id is the requests commit, so a resend changes nothing."""
+    items = [
+        {"type": "app", "key": name, "name": name, "attributes": {"template": app.spec.template}}
+        for name, app in sorted(snapshot.apps.items())
+    ]
+    response = await http.put(
+        f"{thoth_url}/v1/scans/requests-{snapshot.commit}/shikigami/all/items",
+        json={"items": items},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    response.raise_for_status()
+    return response.json()
