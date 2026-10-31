@@ -31,3 +31,15 @@ async def ensure_repo(
         raise NoTemplate(f"{template}: no template repo {org}/{template_repo(template)}")
     response.raise_for_status()
     return True
+
+
+async def runner_token(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, app: str) -> str:
+    """The registration token the app's Sindri runner joins its repo with. Gitea asks for repo admin (our patched
+    build, D80; upstream wants owner) - Shikigami is admin of the repos it creates. Answers the repo's current token,
+    so asking again doesn't break a runner that already joined."""
+    response = await http.post(
+        f"{gitea_url}/api/v1/repos/{org}/{app}/actions/runners/registration-token",
+        headers={"Authorization": f"token {token}"},
+    )
+    response.raise_for_status()
+    return str(response.json()["token"])

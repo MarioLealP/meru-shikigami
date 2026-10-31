@@ -47,7 +47,11 @@ async def run(app: str) -> str:
             settings.authentik_password,
         )
         client = await connect(settings, tokens)
-        kv = KV(bao, boot.openbao_addr, "apps", boot.openbao_token.get_secret_value())
+
+        async def admin_token() -> str:  # the admin session's, fixed for the run
+            return boot.openbao_token.get_secret_value()
+
+        kv = KV(bao, boot.openbao_addr, "apps", admin_token)
 
         async def runner_token(asked: str) -> str:
             if asked != app:  # the lent token is scoped to one repo

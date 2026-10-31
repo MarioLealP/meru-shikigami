@@ -27,6 +27,8 @@ externalSecrets:
 # Its client certificate for Temporal's front door (D70), mounted where the settings look (tls_dir).
 certificate:
   enabled: true
+openbaoLogin:
+  enabled: true # OnboardBuild writes build credentials with Shikigami's own OpenBao login (D79)
 # More workers while app steps queue up (D75): KEDA polls /backlog, one replica per 5 waiting tasks, 1 to 4.
 autoscaling:
   enabled: true

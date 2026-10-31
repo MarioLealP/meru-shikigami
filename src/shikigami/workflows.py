@@ -18,10 +18,17 @@ TIMEOUT = timedelta(minutes=2)  # per attempt
 RETRY = RetryPolicy(maximum_attempts=5)  # then the run fails and the next ping or night tries again
 
 
+def fingerprint(public_key: str) -> str:
+    """A short stand-in for a public key in logs (the key itself is public, just long)."""
+    body = "".join(line for line in public_key.splitlines() if "-----" not in line)
+    return f"...{body[-12:]}" if body else "(none)"
+
+
 @workflow.defn
 class AppWorkflow:
     """One app's pass, as a child of requests-sync, so many apps run side by side and fail apart (D75). Requested apps
-    walk their steps in order, each keeping what exists (D78); retiring stays a dry run (only Anubis retires, D53)."""
+    walk their steps in order, each keeping what exists (D78): repo, then build credentials (OnboardBuild, its own
+    child). Retiring stays a dry run (only Anubis retires, D53)."""
 
     @workflow.run
     async def run(self, action: AppAction) -> None:
@@ -33,6 +40,10 @@ class AppWorkflow:
                 retry_policy=RETRY,
             )
             workflow.logger.info("app %s: repo %s", action.app, "created" if created else "kept")
+            public_key = await workflow.execute_child_workflow(
+                OnboardBuild.run, action.app, id=f"onboard-build-{action.app}"
+            )
+            workflow.logger.info("app %s: build credentials ready, signing key %s", action.app, fingerprint(public_key))
         await workflow.execute_activity_method(
             Activities.dry_run, action, start_to_close_timeout=TIMEOUT, retry_policy=RETRY
         )

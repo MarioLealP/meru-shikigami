@@ -3,22 +3,26 @@ identical; Temporal hands each task to one of them."""
 
 import asyncio
 import logging
+import ssl
 
 import httpx2
 import uvicorn
 from temporalio.worker import Worker
 
-from shikigami.activities import Activities
+from shikigami.activities import Activities, BuildActivities
 from shikigami.config import Settings
+from shikigami.openbao import KV, KubernetesLogin
+from shikigami.repos import runner_token
 from shikigami.temporal import connect, ensure_nightly, keep_token_fresh
 from shikigami.tokens import TokenSource
 from shikigami.web import make_app
-from shikigami.workflows import AppWorkflow, RequestsSync
+from shikigami.workflows import AppWorkflow, OnboardBuild, RequestsSync
 
 
 async def run() -> None:
     settings = Settings()  # the secrets come from the environment
-    async with httpx2.AsyncClient(timeout=30) as http:
+    tls = ssl.create_default_context(cafile=settings.openbao_dir / "ca.crt")
+    async with httpx2.AsyncClient(timeout=30) as http, httpx2.AsyncClient(timeout=30, verify=tls) as bao:
 
         def tokens(client_id: str) -> TokenSource:
             password = settings.authentik_password
@@ -28,16 +32,27 @@ async def run() -> None:
         client = await connect(settings, temporal_tokens)
         await ensure_nightly(client, settings)
         activities = Activities(settings, http, tokens(settings.thoth_client_id))
+        login = KubernetesLogin(bao, settings.openbao_addr, settings.openbao_role, settings.openbao_dir / "token")
+        kv = KV(bao, settings.openbao_addr, "apps", login.get)
+
+        async def app_runner_token(app: str) -> str:
+            gitea_token = settings.gitea_token.get_secret_value()
+            return await runner_token(http, settings.gitea_url, gitea_token, settings.apps_org, app)
+
+        build = BuildActivities(kv, settings.zot_registry, settings.cosign, app_runner_token)
         worker = Worker(
             client,
             task_queue=settings.task_queue,
-            workflows=[RequestsSync, AppWorkflow],
+            workflows=[RequestsSync, AppWorkflow, OnboardBuild],
             activities=[
                 activities.read_requests,
                 activities.read_existing_apps,
                 activities.declare_apps,
                 activities.ensure_repo,
                 activities.dry_run,
+                build.ensure_build_keys,
+                build.ensure_zot_login,
+                build.ensure_runner_registration,
             ],
             max_concurrent_activities=settings.max_concurrent_activities,
         )

@@ -3,7 +3,7 @@ import json
 import httpx2
 import pytest
 
-from shikigami.repos import NoTemplate, ensure_repo, template_repo
+from shikigami.repos import NoTemplate, ensure_repo, runner_token, template_repo
 
 
 def gitea(status: int, seen: list[httpx2.Request]) -> httpx2.AsyncClient:
@@ -46,3 +46,24 @@ async def test_a_missing_template_repo_is_named():
     with pytest.raises(NoTemplate, match="no template repo Meru/nuwa-upstream"):
         async with gitea(404, []) as http:
             await ensure_repo(http, "https://git.test", "tok", "Meru", "echo", "nuwa/upstream", "x")
+
+
+async def test_runner_token_comes_from_the_repo():
+    seen: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request)
+        return httpx2.Response(200, json={"token": "reg-token"})
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http:
+        assert await runner_token(http, "https://git.test", "tok", "Meru", "echo") == "reg-token"
+    [request] = seen
+    assert (request.method, request.url.path) == ("POST", "/api/v1/repos/Meru/echo/actions/runners/registration-token")
+    assert request.headers["authorization"] == "token tok"
+
+
+async def test_runner_token_refusal_is_raised():
+    seen: list[httpx2.Request] = []
+    async with gitea(403, seen) as http:
+        with pytest.raises(httpx2.HTTPStatusError):
+            await runner_token(http, "https://git.test", "tok", "Meru", "echo")
