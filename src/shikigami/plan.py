@@ -18,7 +18,14 @@ def plan(apps: dict[str, App], existing: dict[str, ExistingApp]) -> list[AppActi
         else:
             kind, reason = "check", "matches Thoth, steps re-checked"
         actions.append(
-            AppAction(app=name, kind=kind, reasons=[reason], template=spec.template, description=spec.description)
+            AppAction(
+                app=name,
+                kind=kind,
+                reasons=[reason],
+                template=spec.template,
+                description=spec.description,
+                owner=spec.owner,
+            )
         )
     for name in sorted(set(existing) - set(apps)):
         if existing[name].status != "retired":

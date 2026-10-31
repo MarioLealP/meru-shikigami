@@ -50,6 +50,11 @@ def activities(
     async def dry_run(action: AppAction) -> None:
         done.append(action)
 
+    @activity.defn(name="ensure_deploy_files")
+    async def ensure_deploy_files(app: str, owner: str, public_key: str) -> str:
+        log.append(f"ensure_deploy_files {app} {owner}")
+        return "kept"
+
     @activity.defn(name="ensure_build_keys")
     async def ensure_build_keys(app: str) -> str:
         log.append(f"ensure_build_keys {app}")
@@ -70,6 +75,7 @@ def activities(
         read_existing_apps,
         declare_apps,
         ensure_repo,
+        ensure_deploy_files,
         dry_run,
         ensure_build_keys,
         ensure_zot_login,
@@ -143,6 +149,7 @@ async def test_build_credentials_follow_the_repo_in_order(env: WorkflowEnvironme
         "ensure_build_keys echo",
         "ensure_zot_login echo",
         "ensure_runner_registration echo",
+        "ensure_deploy_files echo mario",
     ]  # nothing for "old": retiring builds nothing
 
 

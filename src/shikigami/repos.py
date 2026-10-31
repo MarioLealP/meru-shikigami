@@ -1,6 +1,8 @@
 """An app's repo (D76, D77): generated from its Nüwa template - a Gitea template repo - by the Shikigami bot, which
 Gitea makes admin of each repo it creates. Only the template's files: no webhooks, labels or protection copied."""
 
+import base64
+
 import httpx2
 
 
@@ -43,3 +45,56 @@ async def runner_token(http: httpx2.AsyncClient, gitea_url: str, token: str, org
     )
     response.raise_for_status()
     return str(response.json()["token"])
+
+
+async def read_file(
+    http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str, path: str
+) -> tuple[str, str] | None:
+    """A file on the repo's default branch: (text, blob sha - what a change to it must name), or None."""
+    response = await http.get(
+        f"{gitea_url}/api/v1/repos/{org}/{repo}/contents/{path}", headers={"Authorization": f"token {token}"}
+    )
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    body = response.json()
+    return base64.b64decode(body["content"]).decode(), str(body["sha"])
+
+
+async def public_file(http: httpx2.AsyncClient, gitea_url: str, org: str, repo: str, path: str) -> str | None:
+    """A file from a public repo, read without credentials (the bot is restricted: it sees only repos it was added
+    to, the public ones included)."""
+    response = await http.get(f"{gitea_url}/api/v1/repos/{org}/{repo}/raw/{path}")
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    return response.text
+
+
+def change(operation: str, path: str, text: str | None = None, sha: str | None = None) -> dict[str, str]:
+    """One file operation of a commit: create (text), update (text + sha), delete (sha)."""
+    op = {"operation": operation, "path": path}
+    if text is not None:
+        op["content"] = base64.b64encode(text.encode()).decode()
+    if sha is not None:
+        op["sha"] = sha
+    return op
+
+
+async def commit_files(
+    http: httpx2.AsyncClient,
+    gitea_url: str,
+    token: str,
+    org: str,
+    repo: str,
+    message: str,
+    files: list[dict[str, str]],
+) -> None:
+    """All the changes as one commit on the default branch. A stale sha fails the whole commit (Gitea answers 409/422),
+    so nothing half-written lands."""
+    response = await http.post(
+        f"{gitea_url}/api/v1/repos/{org}/{repo}/contents",
+        headers={"Authorization": f"token {token}"},
+        json={"message": message, "files": files},
+    )
+    response.raise_for_status()
