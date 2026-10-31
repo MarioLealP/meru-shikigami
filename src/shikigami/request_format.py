@@ -1,13 +1,15 @@
 """The request format v1 (D34): what someone asks Meru for, one YAML file per thing in Meru/requests.
 
 `App` (apps/<name>.yaml) and `Database` (databases/<name>.yaml). A request says what is wanted, never how: Shikigami
-turns it into repos, charts, OpenBao entries and PRs. Status lives in Thoth, not here; the only thing written back
-into a file is `metadata.approvedBy`, by Shikigami's bot after an approval in the atlas.
+turns it into repos, charts, OpenBao entries and PRs. Status lives in Thoth, not here; the only things written back
+into a file are who approved and who removed it, and when - by Xolotl, after the atlas (D82, D83). Retiring keeps the
+file: `spec.removed: true`, and Charon deletes the file last, after the retention.
 
 Fields marked "approval" in the docs pause the workflow for Mario's yes in the atlas (D11); this module only checks
 the shape, the workflow decides what is risky.
 """
 
+from datetime import datetime
 from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
@@ -30,7 +32,11 @@ class _Model(BaseModel):
 
 class Metadata(_Model):
     name: Name
-    approvedBy: str | None = Field(default=None, description="Written by Shikigami's bot after an atlas approval.")
+    approvedBy: str | None = Field(default=None, description="Written by Xolotl after an atlas approval.")
+    removedBy: str | None = Field(default=None, description="Written by Xolotl when a removal is approved.")
+    removedAt: datetime | None = Field(
+        default=None, description="Written by Xolotl with removedBy; the retention counts from here."
+    )
 
 
 class Route(_Model):
@@ -81,6 +87,9 @@ class AppSpec(_Model):
     heartbeat: Annotated[str, StringConstraints(pattern=r"^/\S*$")] = "/heartbeat"
     exceptions: list[Exception_] = []
     retention: Days = "30d"
+    removed: bool = Field(
+        default=False, description="true = retire (D83): stopped and revoked now, purged after the retention."
+    )
 
     @model_validator(mode="after")
     def _image_only_for_upstream(self) -> Self:
@@ -89,11 +98,21 @@ class AppSpec(_Model):
         return self
 
 
+def _removal_recorded_only_when_removed(metadata: Metadata, removed: bool) -> None:
+    if not removed and (metadata.removedBy or metadata.removedAt):
+        raise ValueError("removedBy/removedAt only on a request with spec.removed: true")
+
+
 class App(_Model):
     apiVersion: Literal["meru.clockmost.com/v1"]
     kind: Literal["App"]
     metadata: Metadata
     spec: AppSpec
+
+    @model_validator(mode="after")
+    def _removal(self) -> Self:
+        _removal_recorded_only_when_removed(self.metadata, self.spec.removed)
+        return self
 
 
 class DatabaseStorage(_Model):
@@ -110,6 +129,7 @@ class DatabaseSpec(_Model):
     storage: DatabaseStorage
     app: Name = Field(description="The one app that gets the credentials: no shared databases.")
     retention: Days = "30d"
+    removed: bool = Field(default=False, description="true = retire (D83): purged after the retention.")
 
 
 class Database(_Model):
@@ -117,6 +137,11 @@ class Database(_Model):
     kind: Literal["Database"]
     metadata: Metadata
     spec: DatabaseSpec
+
+    @model_validator(mode="after")
+    def _removal(self) -> Self:
+        _removal_recorded_only_when_removed(self.metadata, self.spec.removed)
+        return self
 
 
 Request = App | Database

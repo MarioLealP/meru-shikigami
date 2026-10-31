@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+- `spec.removed` on App and Database requests (D83): retiring keeps the request file; Charon deletes it last, after
+  the retention. `metadata.removedBy` + `removedAt` (Xolotl writes them, like `approvedBy`) only on a removed
+  request. A removed app plans as `retire` on every pass (still the dry run until the retire workflow). Validation:
+  an app can't be removed while its database isn't.
+
 ### Fixed
 - `shikigami-run` logs at INFO: the workflows' and activities' lines (the dry run's "would ...") were dropped.
 - The HTTP port setting is `http_port` (`SHIKIGAMI_HTTP_PORT`): Kubernetes' service link `SHIKIGAMI_PORT=tcp://...`

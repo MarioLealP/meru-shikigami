@@ -77,6 +77,8 @@ def test_good_repo(tmp_path: Path) -> None:
         ({"apps/thoth.yaml": None}, "has no apps/thoth.yaml"),
         ({"databases/other.yaml": THOTH_DB.replace("name: thoth", "name: other", 1)}, "one database per app"),
         ({"apps/thoth.yaml": THOTH + "  route: {host: echo.clockmost.com}\n"}, "used by 2 apps"),
+        ({"apps/echo.yaml": ECHO.replace("  name: echo\n", "  name: echo\n  removedBy: mario\n")}, "only on a request"),
+        ({"apps/thoth.yaml": THOTH + "  removed: true\n"}, "the database isn't"),
         ({"notes.txt": "hi\n"}, "not a request"),
         ({"apps/sub/echo.yaml": ECHO}, "not a request"),
     ],
@@ -84,6 +86,11 @@ def test_good_repo(tmp_path: Path) -> None:
 def test_rejects(tmp_path: Path, files: dict[str, str | None], expected: str) -> None:
     problems = check(repo(tmp_path, GOOD | files))
     assert any(expected in p for p in problems), problems
+
+
+def test_a_removed_app_with_its_removal_recorded_is_valid(tmp_path: Path) -> None:
+    removed = ECHO.replace("  name: echo\n", "  name: echo\n  removedBy: mario\n  removedAt: 2026-10-31T21:00:00Z\n")
+    assert check(repo(tmp_path, GOOD | {"apps/echo.yaml": removed + "  removed: true\n"})) == []
 
 
 def test_schema_files_match_the_models() -> None:
