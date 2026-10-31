@@ -12,7 +12,8 @@
   its signing key + build-namespace exception (`Meru/kyverno`), derived - the request picks none of it. Shikigami is
   only a reader there: the PRs go in by AGit (`refs/for/main`), one per repo, never again while one with the same
   title exists (open, merged, or closed unmerged). Only adds: another key already listed for the app is left for a
-  person. The image carries git.
+  person. The image carries git. Also the app's Zot push rule (`Meru/zot config.json`: only `<app>-builder` pushes
+  to `meru/<app>`), a third PR - the login alone got golem's first build as far as a refused push.
 - Shikigami is a Meru app: `deploy/meru.yaml` + `deploy/values.yaml` (nuwa-app 0.5.0, certificate for Temporal,
   KEDA autoscaling on `/backlog`, its Authentik + Gitea logins via ESO), CI on its Sindri runner (checks, then build,
   push, sign and deploy on `main`), `scripts/check.sh`.
