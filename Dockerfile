@@ -6,6 +6,9 @@ COPY --from=ghcr.io/astral-sh/uv:0.13.6@sha256:af22a52f5eafef3d78e551599d405c02d
 ADD --checksum=sha256:424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa --chmod=755 \
     https://github.com/sigstore/cosign/releases/download/v3.1.4/cosign-linux-amd64 /usr/local/bin/cosign
 
+# git opens Shikigami's PRs into Meru/meru and Meru/kyverno, where it may only read (AGit, D82).
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 # Dependencies first, so a code change doesn't rebuild them.
 COPY pyproject.toml uv.lock README.md ./

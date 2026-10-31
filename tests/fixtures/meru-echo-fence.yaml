@@ -1,0 +1,21 @@
+# Echo's fence: where its Application may read from and deploy to - its own repo plus the
+# Nüwa and Sindri charts, into exactly its two namespaces, which it may also create.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: meru-echo
+  namespace: argocd
+spec:
+  description: Echo - Meru's placeholder app.
+  sourceRepos:
+    - https://git.clockmost.com/Meru/echo.git
+    - https://git.clockmost.com/Meru/nuwa.git
+    - https://git.clockmost.com/Meru/sindri.git
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: echo
+    - server: https://kubernetes.default.svc
+      namespace: echo-build
+  clusterResourceWhitelist:
+    - { group: "", kind: Namespace, name: echo }
+    - { group: "", kind: Namespace, name: echo-build }

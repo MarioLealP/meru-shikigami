@@ -28,7 +28,8 @@ def fingerprint(public_key: str) -> str:
 class AppWorkflow:
     """One app's pass, as a child of requests-sync, so many apps run side by side and fail apart (D75). Requested apps
     walk their steps in order, each keeping what exists (D78): repo, build credentials (OnboardBuild, its own child),
-    then the deploy files (D81). Retiring stays a dry run (only Anubis retires, D53)."""
+    then its fence + signing key, proposed as PRs (D82), then the deploy files (D81). Retiring stays a dry run (only
+    Anubis retires, D53)."""
 
     @workflow.run
     async def run(self, action: AppAction) -> None:
@@ -44,6 +45,13 @@ class AppWorkflow:
                 OnboardBuild.run, action.app, id=f"onboard-build-{action.app}"
             )
             workflow.logger.info("app %s: build credentials ready, signing key %s", action.app, fingerprint(public_key))
+            trust = await workflow.execute_activity_method(
+                Activities.ensure_trust,
+                args=[action.app, action.description, public_key],
+                start_to_close_timeout=TIMEOUT,
+                retry_policy=RETRY,
+            )
+            workflow.logger.info("app %s: %s", action.app, trust)
             if action.owner:
                 deploy = await workflow.execute_activity_method(
                     Activities.ensure_deploy_files,

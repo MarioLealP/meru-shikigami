@@ -8,6 +8,11 @@
   for the Service named shikigami crashed the pod at start.
 
 ### Added
+- An app's trust files proposed as PRs (D82): its fence (`Meru/meru projects/<app>.yaml` + kustomization entry) and
+  its signing key + build-namespace exception (`Meru/kyverno`), derived - the request picks none of it. Shikigami is
+  only a reader there: the PRs go in by AGit (`refs/for/main`), one per repo, never again while one with the same
+  title exists (open, merged, or closed unmerged). Only adds: another key already listed for the app is left for a
+  person. The image carries git.
 - Shikigami is a Meru app: `deploy/meru.yaml` + `deploy/values.yaml` (nuwa-app 0.5.0, certificate for Temporal,
   KEDA autoscaling on `/backlog`, its Authentik + Gitea logins via ESO), CI on its Sindri runner (checks, then build,
   push, sign and deploy on `main`), `scripts/check.sh`.

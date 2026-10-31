@@ -153,3 +153,91 @@ async def test_a_template_without_the_owner_line_is_not_retried():
     with pytest.raises(ApplicationError) as raised:
         await deploy({"deploy/meru.yaml.in": "chart: x\n", "deploy/values.yaml": VALUES}, READY)
     assert raised.value.non_retryable
+
+
+GOLEM_KEY = "-----BEGIN PUBLIC KEY-----\nGOLEM\n-----END PUBLIC KEY-----\n"
+TRUST_REPOS = {
+    "meru/raw/kustomization.yaml": "resources:\n  - projects/echo.yaml\n  - appsets/meru-apps.yaml\n",
+    "kyverno/raw/kustomization.yaml": "resources:\n  - keys/meru-signing-keys.yaml\n  - exceptions/echo-build.yaml\n",
+    "kyverno/raw/keys/meru-signing-keys.yaml": SIGNING_KEYS,
+}
+
+
+async def onboard_trust(
+    monkeypatch: pytest.MonkeyPatch, public: dict[str, str], pulls: dict[str, list[dict]], app: str = "golem", key=None
+) -> tuple[str, list[dict]]:
+    """ensure_trust against public trust repos + their PR lists; returns the result and the PRs it opened."""
+    opened: list[dict] = []
+
+    async def fake_open_pr(remote, user, token, topic, title, description, files):
+        opened.append({"remote": remote, "user": user, "topic": topic, "title": title, "files": files})
+
+    monkeypatch.setattr("shikigami.activities.open_pr", fake_open_pr)
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        path = request.url.path.removeprefix("/api/v1/repos/Meru/")
+        if path.endswith("/pulls"):
+            return httpx2.Response(200, json=pulls.get(path.split("/")[0], []))
+        return httpx2.Response(200, text=public[path]) if path in public else httpx2.Response(404)
+
+    http = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+    tokens = TokenSource(http, "https://auth.test/token/", "thoth", "shikigami", SecretStr("pw"))
+    settings = Settings.model_construct(
+        gitea_url="https://git.test", gitea_token=SecretStr("tok"), gitea_user="shikigami", apps_org="Meru"
+    )
+    result = await ActivityEnvironment().run(
+        Activities(settings, http, tokens).ensure_trust, app, "a test app.", key or GOLEM_KEY
+    )
+    return result, opened
+
+
+async def test_a_new_app_gets_one_pr_per_trust_repo(monkeypatch: pytest.MonkeyPatch):
+    result, [fence, keys] = await onboard_trust(monkeypatch, TRUST_REPOS, {})
+    assert result == "fence proposed in Meru/meru; key proposed in Meru/kyverno"
+    assert (fence["remote"], fence["user"], fence["topic"]) == (
+        "https://git.test/Meru/meru.git",
+        "shikigami",
+        "onboard-golem",
+    )
+    assert fence["title"] == "onboard golem: fence"
+    assert set(fence["files"]) == {"projects/golem.yaml", "kustomization.yaml"}
+    assert "  - projects/golem.yaml\n" in fence["files"]["kustomization.yaml"]
+    assert keys["title"] == "onboard golem: signing key"
+    assert set(keys["files"]) == {"keys/meru-signing-keys.yaml", "exceptions/golem-build.yaml", "kustomization.yaml"}
+    assert keys["files"]["keys/meru-signing-keys.yaml"].endswith(
+        "  golem: |\n    -----BEGIN PUBLIC KEY-----\n    GOLEM\n    -----END PUBLIC KEY-----\n"
+    )
+
+
+async def test_an_app_already_trusted_is_kept_without_a_pr(monkeypatch: pytest.MonkeyPatch):
+    public = {
+        **TRUST_REPOS,
+        "meru/raw/projects/echo.yaml": "kind: AppProject\n",
+        "kyverno/raw/exceptions/echo-build.yaml": "x",
+    }
+    result, opened = await onboard_trust(monkeypatch, public, {}, app="echo", key=PUBLIC_KEY)
+    assert (result, opened) == ("fence kept; key kept", [])
+
+
+async def test_an_open_or_rejected_pr_is_never_proposed_again(monkeypatch: pytest.MonkeyPatch):
+    pulls = {
+        "meru": [{"number": 4, "title": "onboard golem: fence", "state": "open"}],
+        "kyverno": [{"number": 2, "title": "onboard golem: signing key", "state": "closed", "merged": False}],
+    }
+    result, opened = await onboard_trust(monkeypatch, TRUST_REPOS, pulls)
+    assert result == "fence waiting on Meru/meru#4; key Meru/kyverno#2 was closed unmerged - not proposed again"
+    assert opened == []
+
+
+async def test_another_key_for_the_app_is_never_swapped_in(monkeypatch: pytest.MonkeyPatch):
+    public = {**TRUST_REPOS, "meru/raw/projects/echo.yaml": "kind: AppProject\n"}
+    result, opened = await onboard_trust(monkeypatch, public, {}, app="echo", key=GOLEM_KEY)
+    assert result == "fence kept; key waiting: Meru/kyverno already trusts another key for echo - by hand"
+    assert opened == []
+
+
+async def test_a_trust_repo_that_lost_its_layout_is_not_retried(monkeypatch: pytest.MonkeyPatch):
+    public = {**TRUST_REPOS, "meru/raw/kustomization.yaml": "resources: []\n"}
+    with pytest.raises(ApplicationError, match="no `  - projects/") as raised:
+        await onboard_trust(monkeypatch, public, {})
+    assert raised.value.non_retryable
