@@ -6,6 +6,7 @@ import hmac
 from fastapi import FastAPI, Header, HTTPException, Request
 from temporalio.client import Client
 from temporalio.common import WorkflowIDConflictPolicy
+from temporalio.service import RPCError
 
 from shikigami.config import Settings
 from shikigami.temporal import backlog
@@ -22,7 +23,11 @@ def make_app(settings: Settings, client: Client) -> FastAPI:
     @app.get("/ready")
     async def ready() -> dict[str, str]:
         # Temporal's own health check needs no token; it proves the TLS connection works.
-        if not await client.service_client.check_health():
+        try:
+            healthy = await client.service_client.check_health()
+        except RPCError:
+            healthy = False
+        if not healthy:
             raise HTTPException(503, "Temporal not reachable")
         return {"status": "ok"}
 
