@@ -166,11 +166,16 @@ TRUST_REPOS = {
 }
 
 
+PINGS: list[str] = []
+
+
 async def onboard_trust(
     monkeypatch: pytest.MonkeyPatch, public: dict[str, str], pulls: dict[str, list[dict]], app: str = "golem", key=None
 ) -> tuple[str, list[dict]]:
-    """ensure_trust against public trust repos + their PR lists; returns the result and the PRs it opened."""
+    """ensure_trust against public trust repos + their PR lists; returns the result and the PRs it opened. Pings to
+    Xolotl land in PINGS."""
     opened: list[dict] = []
+    PINGS.clear()
 
     async def fake_open_pr(remote, user, token, topic, title, description, files):
         opened.append({"remote": remote, "user": user, "topic": topic, "title": title, "files": files})
@@ -178,6 +183,9 @@ async def onboard_trust(
     monkeypatch.setattr("shikigami.activities.open_pr", fake_open_pr)
 
     def handler(request: httpx2.Request) -> httpx2.Response:
+        if request.url.host == "xolotl.xolotl.svc":
+            PINGS.append(request.method + " " + request.url.path)
+            return httpx2.Response(202, json={"status": "queued"})
         path = request.url.path.removeprefix("/api/v1/repos/Meru/")
         if path.endswith("/pulls"):
             return httpx2.Response(200, json=pulls.get(path.split("/")[0], []))
@@ -197,6 +205,7 @@ async def onboard_trust(
 async def test_a_new_app_gets_one_pr_per_trust_repo(monkeypatch: pytest.MonkeyPatch):
     result, [fence, keys, push] = await onboard_trust(monkeypatch, TRUST_REPOS, {})
     assert result == "fence proposed in Meru/meru; key proposed in Meru/kyverno; push rule proposed in Meru/zot"
+    assert PINGS == ["POST /ping"]  # once per pass, not per PR
     assert (push["remote"], push["title"]) == (
         "https://git.test/Meru/zot.git",
         "chore(trust): onboard golem - push rule",
@@ -225,6 +234,7 @@ async def test_an_app_already_trusted_is_kept_without_a_pr(monkeypatch: pytest.M
     }
     result, opened = await onboard_trust(monkeypatch, public, {}, app="echo", key=PUBLIC_KEY)
     assert (result, opened) == ("fence kept; key kept; push rule kept", [])
+    assert PINGS == []  # nothing opened, nothing to sweep
 
 
 async def test_an_open_or_rejected_pr_is_never_proposed_again(monkeypatch: pytest.MonkeyPatch):

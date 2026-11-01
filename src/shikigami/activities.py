@@ -127,7 +127,7 @@ class Activities:
                 parts.append(f"{label} waiting: {files} - by hand")
             else:
                 parts.append(f"{label} {await self._propose(app, repo, what, files)}")
-        return "; ".join(parts)
+        return await self._ping_merger("; ".join(parts))
 
     async def _fence_files(self, app: str, description: str) -> dict[str, str]:
         org, path = self._settings.apps_org, f"projects/{app}.yaml"
@@ -166,6 +166,16 @@ class Activities:
         if text is None:
             raise trust.BadLayout(f"{org}/{repo} has no {path}")
         return text
+
+    async def _ping_merger(self, result: str) -> str:
+        """Tell Xolotl to sweep now if this pass opened a PR (D87). Best effort: its own sweep every 15 minutes is
+        the backstop, so a failed ping is logged, never retried. Returns `result` unchanged."""
+        if "proposed in" in result:
+            try:
+                (await self._http.post(self._settings.merger_ping_url, json={})).raise_for_status()
+            except httpx2.HTTPError as e:
+                activity.logger.warning("Xolotl not pinged: %s", e)
+        return result
 
     async def _propose(
         self, app: str, repo: str, what: str, files: Mapping[str, str | None], direction: str = "onboard"
@@ -300,7 +310,7 @@ class Activities:
             )
         except trust.BadLayout as e:
             raise ApplicationError(str(e), non_retryable=True) from e
-        return (
+        return await self._ping_merger(
             f"fence {await self._propose(app, 'meru', 'fence', meru, 'retire')}; "
             f"key {await self._propose(app, 'kyverno', 'signing key', kyverno, 'retire')}; "
             f"push rule {await self._propose(app, 'zot', 'push rule', zot, 'retire')}"
