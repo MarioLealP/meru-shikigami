@@ -72,7 +72,9 @@ async def run() -> None:
             ],
             max_concurrent_activities=settings.max_concurrent_activities,
         )
-        server = uvicorn.Server(uvicorn.Config(make_app(settings, client), host="0.0.0.0", port=settings.http_port))
+        server = uvicorn.Server(
+            uvicorn.Config(make_app(settings, client, http), host="0.0.0.0", port=settings.http_port)
+        )
         async with asyncio.TaskGroup() as group:
             group.create_task(keep_token_fresh(client, temporal_tokens))
             group.create_task(worker.run())

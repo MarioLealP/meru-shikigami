@@ -1,19 +1,22 @@
-"""Shikigami's HTTP side: probes, the webhook ping (D65) and the backlog KEDA scales on (D75)."""
+"""Shikigami's HTTP side: probes, the webhook ping (D65), the backlog KEDA scales on (D75) and the request check
+Janus asks before opening a request PR (D96)."""
 
 import hashlib
 import hmac
 
+import httpx2
 from fastapi import FastAPI, Header, HTTPException, Request
 from temporalio.client import Client
 from temporalio.common import WorkflowIDConflictPolicy
 from temporalio.service import RPCError
 
 from shikigami.config import Settings
+from shikigami.sources import Proposal, Verdict, check_proposal
 from shikigami.temporal import backlog
 from shikigami.workflows import SYNC_ID, RequestsSync
 
 
-def make_app(settings: Settings, client: Client) -> FastAPI:
+def make_app(settings: Settings, client: Client, http: httpx2.AsyncClient) -> FastAPI:
     app = FastAPI(title="Shikigami", docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.get("/heartbeat")
@@ -49,6 +52,18 @@ def make_app(settings: Settings, client: Client) -> FastAPI:
             start_signal="poke",
         )
         return {"status": "queued"}
+
+    @app.post("/validate")
+    async def validate(proposal: Proposal) -> Verdict:
+        """Would this request file be valid on the requests repo's main? Parsing only (yaml.safe_load + the request
+        models); nothing is written anywhere. Reachable from Janus only (its NetworkPolicy)."""
+        s = settings
+        try:
+            return await check_proposal(
+                http, s.gitea_url, s.requests_repo, s.requests_branch, s.gitea_token.get_secret_value(), proposal
+            )
+        except httpx2.HTTPError as e:
+            raise HTTPException(502, f"can't read the requests repo: {type(e).__name__}") from e
 
     @app.get("/backlog")
     async def get_backlog() -> dict[str, int]:

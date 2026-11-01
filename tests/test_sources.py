@@ -7,7 +7,7 @@ import yaml
 
 from shikigami.models import RequestsSnapshot
 from shikigami.request_format import App
-from shikigami.sources import declare_apps, read_existing_apps, read_requests
+from shikigami.sources import Proposal, check_proposal, declare_apps, read_existing_apps, read_requests
 
 ECHO = b"""\
 apiVersion: meru.clockmost.com/v1
@@ -92,3 +92,44 @@ async def test_declares_every_requested_app_as_one_snapshot():
     assert json.loads(request.content) == {
         "items": [{"type": "app", "key": "echo", "name": "echo", "attributes": {"template": "nuwa/python"}}]
     }
+
+
+def app_file(name: str, host: str | None = None) -> str:
+    route = f"  route:\n    host: {host}\n" if host else ""
+    return (
+        f"apiVersion: meru.clockmost.com/v1\nkind: App\nmetadata:\n  name: {name}\n"
+        f"spec:\n  owner: mario\n  description: A test app\n{route}"
+    )
+
+
+async def check(files: dict[str, bytes], path: str, content: str):
+    async with gitea(files, []) as http:
+        return await check_proposal(
+            http, "https://git.test", "Meru/requests", "main", "tok", Proposal(path=path, content=content)
+        )
+
+
+async def test_a_good_proposal_has_no_problems_and_names_the_main_it_was_checked_on():
+    verdict = await check({"apps/echo.yaml": ECHO}, "apps/golem.yaml", app_file("golem"))
+    assert verdict.commit == "abc123"
+    assert verdict.problems == []
+
+
+async def test_a_bad_proposal_gets_its_problems_with_paths_relative_to_the_repo():
+    verdict = await check({"apps/echo.yaml": ECHO}, "apps/golem.yaml", app_file("other"))
+    assert verdict.problems == ["apps/golem.yaml: metadata.name 'other' must match the file name 'golem'"]
+
+
+async def test_checks_across_files_count():
+    verdict = await check({"apps/echo.yaml": ECHO}, "apps/golem.yaml", app_file("golem", host="echo.clockmost.com"))
+    assert verdict.problems == ["route.host echo.clockmost.com is used by 2 apps"]
+
+
+async def test_problems_main_already_has_are_not_blamed_on_the_proposal():
+    verdict = await check({"apps/echo.yaml": ECHO, "notes.txt": b"stray"}, "apps/golem.yaml", app_file("golem"))
+    assert verdict.problems == []
+
+
+async def test_not_yaml_is_a_problem_not_a_crash():
+    verdict = await check({"apps/echo.yaml": ECHO}, "apps/golem.yaml", "spec: [unclosed")
+    assert len(verdict.problems) == 1 and verdict.problems[0].startswith("apps/golem.yaml: not YAML")
