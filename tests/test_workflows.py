@@ -22,7 +22,11 @@ ECHO = App.model_validate(
 
 
 def activities(
-    snapshot: RequestsSnapshot, existing: dict[str, ExistingApp], done: list[AppAction], log: list[str] | None = None
+    snapshot: RequestsSnapshot,
+    existing: dict[str, ExistingApp],
+    done: list[AppAction],
+    log: list[str] | None = None,
+    deploy: str = "kept",
 ):
     log = [] if log is None else log
 
@@ -53,6 +57,11 @@ def activities(
     @activity.defn(name="ensure_deploy_files")
     async def ensure_deploy_files(app: str, owner: str, public_key: str) -> str:
         log.append(f"ensure_deploy_files {app} {owner}")
+        return deploy
+
+    @activity.defn(name="lock_out")
+    async def lock_out(app: str) -> str:
+        log.append(f"lock_out {app}")
         return "kept"
 
     @activity.defn(name="ensure_trust")
@@ -101,6 +110,7 @@ def activities(
         ensure_repo,
         ensure_trust,
         ensure_deploy_files,
+        lock_out,
         dry_run,
         ensure_build_keys,
         ensure_zot_login,
@@ -115,7 +125,11 @@ async def env():
 
 
 async def run_sync(
-    client: Client, snapshot: RequestsSnapshot, existing: dict[str, ExistingApp], log: list[str] | None = None
+    client: Client,
+    snapshot: RequestsSnapshot,
+    existing: dict[str, ExistingApp],
+    log: list[str] | None = None,
+    deploy: str = "kept",
 ):
     done: list[AppAction] = []
     queue = f"test-{uuid.uuid4()}"
@@ -123,7 +137,7 @@ async def run_sync(
         client,
         task_queue=queue,
         workflows=[RequestsSync, AppWorkflow, OnboardBuild],
-        activities=activities(snapshot, existing, done, log),
+        activities=activities(snapshot, existing, done, log, deploy),
     ):
         result = await client.execute_workflow(RequestsSync.run, id=f"sync-{uuid.uuid4()}", task_queue=queue)
     return result, done
@@ -168,7 +182,7 @@ async def test_build_credentials_follow_the_repo_in_order(env: WorkflowEnvironme
     gone = ExistingApp(key="old", status="active", template="nuwa/python")
     log: list[str] = []
     await run_sync(env.client, snapshot, {"old": gone}, log)
-    steps = [line for line in log if line.split()[0].startswith("ensure_")]
+    steps = [line for line in log if line.split()[0].startswith(("ensure_", "lock_out"))]
     assert steps == [
         "ensure_repo echo nuwa/python",
         "ensure_build_keys echo",
@@ -176,7 +190,21 @@ async def test_build_credentials_follow_the_repo_in_order(env: WorkflowEnvironme
         "ensure_runner_registration echo",
         "ensure_trust echo",
         "ensure_deploy_files echo mario",
+        "lock_out echo",
     ]  # nothing for "old": retiring builds nothing
+
+
+@pytest.mark.parametrize(
+    ("deploy", "locks_out"),
+    [("written, first build started", True), ("kept", True), ("waiting: no fence Meru/meru projects/echo.yaml", False)],
+)
+async def test_shikigami_locks_itself_out_only_once_the_marker_is_in(
+    env: WorkflowEnvironment, deploy: str, locks_out: bool
+):
+    snapshot = RequestsSnapshot(commit="c1", apps={"echo": ECHO}, databases={}, problems=[])
+    log: list[str] = []
+    await run_sync(env.client, snapshot, {}, log, deploy)
+    assert ("lock_out echo" in log) == locks_out
 
 
 def test_fingerprint_shows_the_end_of_the_key():
