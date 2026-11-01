@@ -103,5 +103,5 @@ jobs:
         if: gitea.ref == 'refs/heads/main'
         run: |
           sed -i "s|^  digest: .*|  digest: $DIGEST|; s|^  tag: .*|  tag: \"$TAG\"|" deploy/values.yaml
-          git -c user.name=sindri -c user.email=sindri@clockmost.com commit --quiet -am "deploy: shikigami $TAG"
+          git -c user.name=sindri -c user.email=sindri@clockmost.com commit --quiet -am "chore(deploy): shikigami $TAG"
           git push --quiet origin HEAD:main
