@@ -18,19 +18,31 @@ def template_repo(template: str) -> str:
     return f"nuwa-{name}"
 
 
+async def exists(http: httpx2.AsyncClient, gitea_url: str, org: str, repo: str) -> bool:
+    """Whether a public repo exists, asked without credentials: the restricted bot can't see a repo it left (D89)."""
+    response = await http.get(f"{gitea_url}/api/v1/repos/{org}/{repo}")
+    if response.status_code == 404:
+        return False
+    response.raise_for_status()
+    return True
+
+
 async def ensure_repo(
     http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, app: str, template: str, description: str
 ) -> bool:
     """`org/app` from its template if it doesn't exist; True if it was made now. An existing repo is kept as it is."""
+    source = template_repo(template)  # a request naming no Nüwa template is refused even if the repo exists
+    if await exists(http, gitea_url, org, app):
+        return False
     response = await http.post(
-        f"{gitea_url}/api/v1/repos/{org}/{template_repo(template)}/generate",
+        f"{gitea_url}/api/v1/repos/{org}/{source}/generate",
         json={"owner": org, "name": app, "description": description, "private": False, "git_content": True},
         headers={"Authorization": f"token {token}"},
     )
     if response.status_code == 409:  # already there: kept, whatever made it
         return False
     if response.status_code == 404:
-        raise NoTemplate(f"{template}: no template repo {org}/{template_repo(template)}")
+        raise NoTemplate(f"{template}: no template repo {org}/{source}")
     response.raise_for_status()
     return True
 
@@ -144,3 +156,56 @@ async def archive(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str
         return False
     (await http.patch(url, headers=headers, json={"archived": True})).raise_for_status()
     return True
+
+
+# The end of onboarding (D89): Shikigami protects main, hands Write to the merger and leaves the repo - from then on
+# a hijacked Shikigami can't push, force-push or change settings there.
+
+
+async def is_admin(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str) -> bool:
+    """Whether the bot still administers the repo. A 404 means it left: the restricted bot no longer sees it."""
+    response = await http.get(f"{gitea_url}/api/v1/repos/{org}/{repo}", headers={"Authorization": f"token {token}"})
+    if response.status_code == 404:
+        return False
+    response.raise_for_status()
+    return bool((response.json().get("permissions") or {}).get("admin"))
+
+
+async def protect_main(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str) -> str:
+    """Branch protection on main: pushes as before (CI's digest commits), force push off - an append-only history.
+    Says what it did: added, force push turned off on an existing rule, or kept."""
+    base, headers = f"{gitea_url}/api/v1/repos/{org}/{repo}/branch_protections", {"Authorization": f"token {token}"}
+    response = await http.get(base, headers=headers)
+    response.raise_for_status()
+    rule = next((r for r in response.json() if r.get("rule_name") == "main"), None)
+    if rule is None:
+        created = await http.post(
+            base, headers=headers, json={"rule_name": "main", "enable_push": True, "enable_force_push": False}
+        )
+        created.raise_for_status()
+        return "added"
+    if rule.get("enable_force_push"):
+        (await http.patch(f"{base}/main", headers=headers, json={"enable_force_push": False})).raise_for_status()
+        return "force push turned off"
+    return "kept"
+
+
+async def add_writer(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str, user: str) -> bool:
+    """The user as a Write collaborator; False if no such user exists (yet) - nothing is added then."""
+    if (await http.get(f"{gitea_url}/api/v1/users/{user}")).status_code == 404:
+        return False
+    response = await http.put(
+        f"{gitea_url}/api/v1/repos/{org}/{repo}/collaborators/{user}",
+        headers={"Authorization": f"token {token}"},
+        json={"permission": "write"},
+    )
+    response.raise_for_status()
+    return True
+
+
+async def leave(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str, user: str) -> None:
+    """The bot removes itself from the repo: no push, no settings - public, so it still reads it anonymously."""
+    response = await http.delete(
+        f"{gitea_url}/api/v1/repos/{org}/{repo}/collaborators/{user}", headers={"Authorization": f"token {token}"}
+    )
+    response.raise_for_status()

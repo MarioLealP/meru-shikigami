@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     requests_branch: str = "main"
     gitea_token: SecretStr
     gitea_user: str = "shikigami"  # the token's account - git's Basic auth names it (AGit PRs, D82)
+    merger_user: str = "xolotl"  # gets Write on each app repo as Shikigami leaves it (D87, D89)
     thoth_url: str = "http://thoth.thoth.svc"
 
     # Making an app's build credentials (D32, D66): the registry its builds push to, and the cosign binary.

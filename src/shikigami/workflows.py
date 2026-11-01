@@ -30,7 +30,8 @@ def fingerprint(public_key: str) -> str:
 class AppWorkflow:
     """One app's pass, as a child of requests-sync, so many apps run side by side and fail apart (D75). Requested apps
     walk their steps in order, each keeping what exists (D78): repo, build credentials (OnboardBuild, its own child),
-    then its fence + signing key, proposed as PRs (D82), then the deploy files (D81). A request marked removed runs the
+    then its fence + signing key, proposed as PRs (D82), then the deploy files (D81), then Shikigami locks itself out
+    of the repo (D89). A request marked removed runs the
     retire pass (D85); an app with no request at all stays a dry run."""
 
     @workflow.run
@@ -62,6 +63,11 @@ class AppWorkflow:
                     retry_policy=RETRY,
                 )
                 workflow.logger.info("app %s: deploy files %s", action.app, deploy)
+                if deploy == "kept" or deploy.startswith("written"):  # marker in: the repo is the app's now (D89)
+                    locked = await workflow.execute_activity_method(
+                        Activities.lock_out, action.app, start_to_close_timeout=TIMEOUT, retry_policy=RETRY
+                    )
+                    workflow.logger.info("app %s: lock-out %s", action.app, locked)
         if action.kind == "retire" and action.template:  # removed by its request (D83); no request at all: dry run
             await self._retire(action.app)
             return

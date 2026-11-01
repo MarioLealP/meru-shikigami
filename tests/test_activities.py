@@ -258,11 +258,12 @@ def retiring(
     argo: dict | None = None,
     pulls: dict | None = None,
     public: dict | None = None,
+    admin: bool = True,
 ) -> tuple[Activities, list[dict]]:
     """Activities over a fake Gitea (Meru/golem's files, its runners and archive flag, public trust repos + PR lists)
-    and a fake Kubernetes API holding app-golem (or not)."""
+    and a fake Kubernetes API holding app-golem (or not). `admin`: Shikigami still administers Meru/golem."""
     calls: list[dict] = []
-    repo = {"archived": False}
+    repo = {"archived": False, "permissions": {"admin": admin}}
 
     def gitea(request: httpx2.Request) -> httpx2.Response:
         path = request.url.path.removeprefix("/api/v1/repos/Meru/")
@@ -341,6 +342,17 @@ ARGO_RUNNING = {
 }
 
 
+async def test_a_repo_shikigami_left_is_not_retired_blind(tmp_path: Path):
+    # its reads would come back empty there and pass for "parked" (D89) - refused until the stop + park are PRs
+    activities, calls = retiring(
+        tmp_path, {"deploy/meru.yaml": GOLEM_MARKER, "deploy/values.yaml": GOLEM_VALUES}, admin=False
+    )
+    with pytest.raises(ApplicationError, match="left Meru/golem at onboarding") as raised:
+        await ActivityEnvironment().run(activities.retire_stop, "golem")
+    assert raised.value.non_retryable
+    assert calls == []
+
+
 async def test_waiting_for_argo_retries_until_nothing_runs(tmp_path: Path):
     activities, _ = retiring(tmp_path, {}, argo=ARGO_RUNNING)
     with pytest.raises(ApplicationError, match="still has Deployment") as raised:
@@ -414,3 +426,55 @@ async def test_a_restore_proposes_onboarding_again_after_a_merged_retire(monkeyp
     }
     result, _ = await onboard_trust(monkeypatch, TRUST_REPOS, pulls)
     assert result.startswith("fence proposed in Meru/meru")  # not "Meru/meru#21 merged, not on main yet"
+
+
+def locking(admin: bool, users: set[str]) -> tuple[Activities, list[tuple[str, str]]]:
+    """Activities over a fake Gitea where Shikigami is (or isn't) admin of Meru/echo; records every write."""
+    writes: list[tuple[str, str]] = []
+
+    def gitea(request: httpx2.Request) -> httpx2.Response:
+        path = request.url.path
+        if request.method == "GET" and path == "/api/v1/repos/Meru/echo":
+            return httpx2.Response(200, json={"permissions": {"admin": admin}})
+        if request.method == "GET" and path.endswith("/branch_protections"):
+            return httpx2.Response(200, json=[])
+        if request.method == "GET" and path.startswith("/api/v1/users/"):
+            return httpx2.Response(200 if path.rsplit("/", 1)[1] in users else 404, json={})
+        writes.append((request.method, path.removeprefix("/api/v1/repos/Meru/echo")))
+        return httpx2.Response(201 if request.method == "POST" else 204, json={})
+
+    http = httpx2.AsyncClient(transport=httpx2.MockTransport(gitea))
+    tokens = TokenSource(http, "https://auth.test/token/", "thoth", "shikigami", SecretStr("pw"))
+    settings = Settings.model_construct(
+        gitea_url="https://git.test",
+        gitea_token=SecretStr("tok"),
+        gitea_user="shikigami",
+        merger_user="xolotl",
+        apps_org="Meru",
+    )
+    return Activities(settings, http, tokens), writes
+
+
+async def test_lock_out_protects_hands_over_and_leaves_in_that_order():
+    activities, writes = locking(admin=True, users={"xolotl"})
+    result = await ActivityEnvironment().run(activities.lock_out, "echo")
+    assert result == "main protection added, xolotl given Write, Shikigami left"
+    # each step needs the admin right the last one gives up
+    assert writes == [
+        ("POST", "/branch_protections"),
+        ("PUT", "/collaborators/xolotl"),
+        ("DELETE", "/collaborators/shikigami"),
+    ]
+
+
+async def test_lock_out_still_leaves_before_the_merger_exists():
+    activities, writes = locking(admin=True, users=set())
+    result = await ActivityEnvironment().run(activities.lock_out, "echo")
+    assert result == "main protection added, xolotl skipped (no such user yet), Shikigami left"
+    assert [w[0] for w in writes] == ["POST", "DELETE"]
+
+
+async def test_lock_out_is_kept_once_shikigami_is_not_admin():
+    activities, writes = locking(admin=False, users={"xolotl"})
+    assert await ActivityEnvironment().run(activities.lock_out, "echo") == "kept"
+    assert writes == []

@@ -56,6 +56,7 @@ async def run() -> None:
                 activities.ensure_repo,
                 activities.ensure_trust,
                 activities.ensure_deploy_files,
+                activities.lock_out,
                 activities.retire_stop,
                 activities.retire_wait_stopped,
                 activities.retire_park_marker,

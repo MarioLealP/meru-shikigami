@@ -17,12 +17,16 @@ from shikigami.openbao import KV
 from shikigami.proposals import ProposalFailed, find_pr, open_pr
 from shikigami.repos import (
     NoTemplate,
+    add_writer,
     archive,
     change,
     commit_files,
     delete_runners,
     ensure_repo,
     head,
+    is_admin,
+    leave,
+    protect_main,
     public_file,
     read_file,
     run_workflow,
@@ -195,9 +199,15 @@ class Activities:
     @activity.defn
     async def retire_stop(self, app: str) -> str:
         """One commit: `enabled: false` (no workload) + `build: false` (no runner). Kept once both are there, or once
-        the marker is parked (a later pass)."""
+        the marker is parked (a later pass). A repo Shikigami left at onboarding (D89) is refused: there its reads
+        come back empty, which would pass for "parked" - retiring those needs the stop + park as PRs (next step)."""
         s = self._settings
         token, org = s.gitea_token.get_secret_value(), s.apps_org
+        if not await is_admin(self._http, s.gitea_url, token, org, app):
+            raise ApplicationError(
+                f"Shikigami left {org}/{app} at onboarding (D89): retiring it needs the stop + park as PRs (not built)",
+                non_retryable=True,
+            )
         marker_file = await read_file(self._http, s.gitea_url, token, org, app, "deploy/meru.yaml")
         if marker_file is None:
             return "kept (marker parked)"
@@ -341,6 +351,21 @@ class Activities:
         await run_workflow(self._http, s.gitea_url, token, org, app, "ci.yaml")
         activity.logger.info("%s: first build started", app)
         return "written, first build started"
+
+    @activity.defn
+    async def lock_out(self, app: str) -> str:
+        """The last onboarding step (D89), once the marker is in: protect main (force push off), give the merger
+        Write, and leave the repo. Kept once Shikigami isn't admin there any more - whoever made the repo (Mario's own
+        repos never had Shikigami) or after it left."""
+        s = self._settings
+        token, org = s.gitea_token.get_secret_value(), s.apps_org
+        if not await is_admin(self._http, s.gitea_url, token, org, app):
+            return "kept"
+        protected = await protect_main(self._http, s.gitea_url, token, org, app)
+        merger = await add_writer(self._http, s.gitea_url, token, org, app, s.merger_user)
+        await leave(self._http, s.gitea_url, token, org, app, s.gitea_user)
+        added = "given Write" if merger else "skipped (no such user yet)"
+        return f"main protection {protected}, {s.merger_user} {added}, Shikigami left"
 
     @activity.defn
     async def dry_run(self, action: AppAction) -> None:
