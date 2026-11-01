@@ -162,10 +162,13 @@ async def run_workflow(
     response.raise_for_status()
 
 
-async def head(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str, branch: str = "main") -> str:
-    """The commit a branch points at."""
+async def head(
+    http: httpx2.AsyncClient, gitea_url: str, token: str | None, org: str, repo: str, branch: str = "main"
+) -> str:
+    """The commit a branch points at. token None: asked anonymously (public repos)."""
     response = await http.get(
-        f"{gitea_url}/api/v1/repos/{org}/{repo}/branches/{branch}", headers={"Authorization": f"token {token}"}
+        f"{gitea_url}/api/v1/repos/{org}/{repo}/branches/{branch}",
+        headers={"Authorization": f"token {token}"} if token else {},
     )
     response.raise_for_status()
     return _Branch.model_validate_json(response.content).commit.id
@@ -229,8 +232,8 @@ async def rerun_failed(http: httpx2.AsyncClient, gitea_url: str, token: str, org
     response.raise_for_status()
 
 
-# The end of onboarding (D89): Shikigami protects main, hands Write to the merger and leaves the repo - from then on
-# a hijacked Shikigami can't push, force-push or change settings there.
+# The end of onboarding (D89): Shikigami protects main, hands Write to the merger and drops itself to Read - from then
+# on a hijacked Shikigami can't push, force-push or change settings there, only propose (cm-konk).
 
 
 async def is_admin(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str) -> bool:
@@ -275,9 +278,12 @@ async def add_writer(http: httpx2.AsyncClient, gitea_url: str, token: str, org: 
     return True
 
 
-async def leave(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str, user: str) -> None:
-    """The bot removes itself from the repo: no push, no settings - public, so it still reads it anonymously."""
-    response = await http.delete(
-        f"{gitea_url}/api/v1/repos/{org}/{repo}/collaborators/{user}", headers={"Authorization": f"token {token}"}
+async def become_reader(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str, user: str) -> None:
+    """The bot drops itself to Read (cm-konk): no push, no settings - but it can still propose (AGit PRs, which Gitea
+    takes from a reader) and see the repo at all (a restricted bot sees only repos it's a collaborator of)."""
+    response = await http.put(
+        f"{gitea_url}/api/v1/repos/{org}/{repo}/collaborators/{user}",
+        headers={"Authorization": f"token {token}"},
+        json={"permission": "read"},
     )
     response.raise_for_status()

@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     requests_branch: str = "main"
     gitea_token: SecretStr
     gitea_user: str = "shikigami"  # the token's account - git's Basic auth names it (AGit PRs, D82)
-    merger_user: str = "xolotl"  # gets Write on each app repo as Shikigami leaves it (D87, D89)
+    merger_user: str = "xolotl"  # gets Write on each app repo as Shikigami steps down to Read (D87, D89)
     merger_ping_url: str = "http://xolotl.xolotl.svc/ping"  # "trust PRs opened, sweep now" (D87)
     first_build_reruns: int = 2  # D90: a failed first build is re-run this many times before Shikigami leaves
     thoth_url: str = "http://thoth.thoth.svc"

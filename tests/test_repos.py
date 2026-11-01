@@ -6,10 +6,10 @@ import pytest
 from shikigami.repos import (
     NoTemplate,
     add_writer,
+    become_reader,
     ensure_repo,
     exists,
     is_admin,
-    leave,
     protect_main,
     runner_token,
     template_repo,
@@ -156,9 +156,10 @@ async def test_the_merger_gets_write_only_if_it_exists():
     )
 
 
-async def test_leaving_removes_the_bot_itself():
+async def test_stepping_down_leaves_the_bot_read_only():
     seen: list[httpx2.Request] = []
     async with lock_out_gitea(True, [], set(), seen) as http:
-        await leave(http, "https://git.test", "tok", "Meru", "echo", "shikigami")
-    [delete] = seen
-    assert (delete.method, delete.url.path) == ("DELETE", "/api/v1/repos/Meru/echo/collaborators/shikigami")
+        await become_reader(http, "https://git.test", "tok", "Meru", "echo", "shikigami")
+    [put] = seen
+    assert (put.method, put.url.path) == ("PUT", "/api/v1/repos/Meru/echo/collaborators/shikigami")
+    assert json.loads(put.content) == {"permission": "read"}

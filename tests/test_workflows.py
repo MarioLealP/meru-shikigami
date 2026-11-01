@@ -31,8 +31,10 @@ def activities(
     log: list[str] | None = None,
     deploy: str = "kept",
     first_build: str | None = "passed (attempt 1)",
+    retire: dict[str, object] | None = None,
 ):
-    """`first_build`: what the first_build activity answers; None = it never settles (fails for good)."""
+    """`first_build`: what the first_build activity answers; None = it never settles (fails for good). `retire`:
+    answers for retire steps, by activity name, over the defaults."""
     log = [] if log is None else log
 
     @activity.defn(name="read_requests")
@@ -104,15 +106,17 @@ def activities(
 
         return step
 
-    retire_steps = [
-        retire_step("retire_stop", "written"),
-        retire_step("retire_wait_stopped", "stopped"),
-        retire_step("retire_park_marker", "parked"),
-        retire_step("retire_trust", "fence proposed; key proposed; push rule proposed"),
-        retire_step("retire_runner", 1),
-        retire_step("revoke_zot_login", True),
-        retire_step("retire_archive", True),
-    ]
+    answers: dict[str, object] = {
+        "retire_stop": "written",
+        "retire_wait_stopped": "stopped",
+        "retire_park_marker": "parked",
+        "retire_trust": "fence proposed; key proposed; push rule proposed",
+        "retire_runner": 1,
+        "revoke_zot_login": True,
+        "retire_archive": True,
+        **(retire or {}),
+    }
+    retire_steps = [retire_step(name, result) for name, result in answers.items()]
 
     return [
         *retire_steps,
@@ -144,6 +148,7 @@ async def run_sync(
     log: list[str] | None = None,
     deploy: str = "kept",
     first_build: str | None = "passed (attempt 1)",
+    retire: dict[str, object] | None = None,
 ):
     done: list[AppAction] = []
     queue = f"test-{uuid.uuid4()}"
@@ -151,7 +156,7 @@ async def run_sync(
         client,
         task_queue=queue,
         workflows=[RequestsSync, AppWorkflow, OnboardBuild, FirstBuild],
-        activities=activities(snapshot, existing, done, log, deploy, first_build),
+        activities=activities(snapshot, existing, done, log, deploy, first_build, retire),
     ):
         result = await client.execute_workflow(RequestsSync.run, id=f"sync-{uuid.uuid4()}", task_queue=queue)
         for app in snapshot.apps:  # the first-build watch outlives the sync (D90): let it finish too
@@ -267,3 +272,24 @@ async def test_a_removed_request_retires_in_order_and_onboards_nothing(env: Work
         "retire_archive golem",  # nothing is written to the repo after this
     ]
     assert done == []  # no dry run: the pass is real
+
+
+@pytest.mark.parametrize(
+    ("retire", "last"),
+    [
+        ({"retire_stop": "proposed in Meru/golem"}, "retire_stop golem"),
+        ({"retire_stop": "waiting on Meru/golem#3"}, "retire_stop golem"),
+        ({"retire_park_marker": "proposed in Meru/golem"}, "retire_park_marker golem"),
+    ],
+)
+async def test_a_retire_pr_ends_the_pass_until_xolotl_merges_it(env: WorkflowEnvironment, retire: dict, last: str):
+    golem = ECHO.model_copy(
+        update={
+            "metadata": ECHO.metadata.model_copy(update={"name": "golem"}),
+            "spec": ECHO.spec.model_copy(update={"removed": True}),
+        }
+    )
+    snapshot = RequestsSnapshot(commit="c1", apps={"golem": golem}, databases={}, problems=[])
+    log: list[str] = []
+    await run_sync(env.client, snapshot, {"golem": ExistingApp(key="golem", status="active")}, log, retire=retire)
+    assert [line for line in log if line.startswith("retire_")][-1] == last  # nothing after it this pass
