@@ -54,6 +54,11 @@ Shikigami proposing it again."""
 PROPOSALS = {"onboard": PROPOSAL, "retire": RETIREMENT}
 
 
+def trust_title(direction: str, app: str, what: str) -> str:
+    """A trust PR's title, in the repos' Conventional Commits form - Xolotl reads it back to know what to rebuild."""
+    return f"chore(trust): {direction} {app} - {what}"
+
+
 class Activities:
     def __init__(
         self,
@@ -168,9 +173,9 @@ class Activities:
         if not files:
             return "kept"
         s = self._settings
-        where, title = f"{s.apps_org}/{repo}", f"{direction} {app}: {what}"
+        where, title = f"{s.apps_org}/{repo}", trust_title(direction, app, what)
         # the newest PR of either direction decides: after a retire and a restore, the old onboard PR doesn't count
-        titles = [f"{d} {app}: {what}" for d in PROPOSALS]
+        titles = [trust_title(d, app, what) for d in PROPOSALS]
         pr = await find_pr(self._http, s.gitea_url, s.apps_org, repo, titles)
         if pr is not None and pr["title"] == title:
             if pr["state"] == "open":
@@ -223,7 +228,10 @@ class Activities:
             ]
         except trust.BadLayout as e:
             raise ApplicationError(str(e), non_retryable=True) from e
-        message = f"retire: stop {app} (D85)\n\nRemoved by its request: no workload, no build runner. Shikigami."
+        message = (
+            f"chore(deploy): stop {app} - retired (D85)\n\n"
+            "Removed by its request: no workload, no build runner. Shikigami."
+        )
         await commit_files(self._http, s.gitea_url, token, org, app, message, files)
         return "written"
 
@@ -261,7 +269,10 @@ class Activities:
             ]
         except trust.BadLayout as e:
             raise ApplicationError(str(e), non_retryable=True) from e
-        message = f"retire: park {app}'s marker (D85)\n\nMeru stops deploying the repo; onboarding again undoes it."
+        message = (
+            f"chore(deploy): park {app}'s marker - retired (D85)\n\n"
+            "Meru stops deploying the repo; onboarding again undoes it."
+        )
         await commit_files(self._http, s.gitea_url, token, org, app, message, files)
         return "parked"
 
@@ -340,7 +351,7 @@ class Activities:
         except marker.BadTemplate as e:
             raise ApplicationError(str(e), non_retryable=True) from e
         message = (
-            f"deploy: {app} is a Meru app (owner {owner})\n\n"
+            f"chore(deploy): {app} is a Meru app (owner {owner})\n\n"
             "Written by Shikigami (D81): fence, signing key and build credentials are in place."
         )
         await commit_files(self._http, s.gitea_url, token, org, app, message, files)
