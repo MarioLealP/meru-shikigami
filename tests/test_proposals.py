@@ -50,17 +50,17 @@ async def test_a_proposal_is_one_commit_pushed_to_refs_for_main_with_its_options
         "shikigami",
         "tok",
         "onboard-golem",
-        "onboard golem: fence",
+        "chore(trust): onboard golem - fence",
         "line one\nline two",
         {"projects/golem.yaml": "kind: AppProject\n", "kustomization.yaml": "resources: [x]\n"},
     )
     options = (remote / "push-options").read_text().splitlines()
-    assert options[:2] == ["topic=onboard-golem", "title=onboard golem: fence"]
+    assert options[:2] == ["topic=onboard-golem", "title=chore(trust): onboard golem - fence"]
     assert options[2] == "description={base64}" + base64.b64encode(b"line one\nline two").decode()
     commit = git(remote, "rev-parse", "refs/for/main").strip()
     assert (
         git(remote, "log", "-1", "--format=%an <%ae>|%s", commit).strip()
-        == f"{AUTHOR[0]} <{AUTHOR[1]}>|onboard golem: fence"
+        == f"{AUTHOR[0]} <{AUTHOR[1]}>|chore(trust): onboard golem - fence"
     )
     assert git(remote, "show", f"{commit}:projects/golem.yaml") == "kind: AppProject\n"
     assert git(remote, "rev-list", "--count", commit).strip() == "2"  # on top of main, one commit
@@ -69,7 +69,13 @@ async def test_a_proposal_is_one_commit_pushed_to_refs_for_main_with_its_options
 
 async def test_none_deletes_a_file_in_the_proposal(remote: Path):
     await open_pr(
-        f"file://{remote}", "shikigami", "tok", "retire-golem", "retire golem: fence", "d", {"kustomization.yaml": None}
+        f"file://{remote}",
+        "shikigami",
+        "tok",
+        "retire-golem",
+        "chore(trust): retire golem - fence",
+        "d",
+        {"kustomization.yaml": None},
     )
     commit = git(remote, "rev-parse", "refs/for/main").strip()
     assert git(remote, "ls-tree", "--name-only", commit).strip() == ""  # the seed's only file is gone
@@ -84,8 +90,8 @@ async def test_a_refused_push_says_why(remote: Path):
 
 async def test_find_pr_matches_the_exact_title_open_or_closed():
     pulls = [
-        {"number": 9, "title": "onboard golem: fence (old)", "state": "open"},
-        {"number": 7, "title": "onboard golem: fence", "state": "closed", "merged": False},
+        {"number": 9, "title": "chore(trust): onboard golem - fence (old)", "state": "open"},
+        {"number": 7, "title": "chore(trust): onboard golem - fence", "state": "closed", "merged": False},
     ]
 
     def handler(request: httpx2.Request) -> httpx2.Response:
@@ -94,6 +100,6 @@ async def test_find_pr_matches_the_exact_title_open_or_closed():
         return httpx2.Response(200, json=pulls)
 
     http = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
-    found = await find_pr(http, "https://git.test", "Meru", "meru", ["onboard golem: fence"])
+    found = await find_pr(http, "https://git.test", "Meru", "meru", ["chore(trust): onboard golem - fence"])
     assert found is not None and found["number"] == 7
-    assert await find_pr(http, "https://git.test", "Meru", "meru", ["onboard other: fence"]) is None
+    assert await find_pr(http, "https://git.test", "Meru", "meru", ["chore(trust): onboard other - fence"]) is None

@@ -197,17 +197,20 @@ async def onboard_trust(
 async def test_a_new_app_gets_one_pr_per_trust_repo(monkeypatch: pytest.MonkeyPatch):
     result, [fence, keys, push] = await onboard_trust(monkeypatch, TRUST_REPOS, {})
     assert result == "fence proposed in Meru/meru; key proposed in Meru/kyverno; push rule proposed in Meru/zot"
-    assert (push["remote"], push["title"]) == ("https://git.test/Meru/zot.git", "onboard golem: push rule")
+    assert (push["remote"], push["title"]) == (
+        "https://git.test/Meru/zot.git",
+        "chore(trust): onboard golem - push rule",
+    )
     assert '"golem-builder"' in push["files"]["config.json"]
     assert (fence["remote"], fence["user"], fence["topic"]) == (
         "https://git.test/Meru/meru.git",
         "shikigami",
         "onboard-golem",
     )
-    assert fence["title"] == "onboard golem: fence"
+    assert fence["title"] == "chore(trust): onboard golem - fence"
     assert set(fence["files"]) == {"projects/golem.yaml", "kustomization.yaml"}
     assert "  - projects/golem.yaml\n" in fence["files"]["kustomization.yaml"]
-    assert keys["title"] == "onboard golem: signing key"
+    assert keys["title"] == "chore(trust): onboard golem - signing key"
     assert set(keys["files"]) == {"keys/meru-signing-keys.yaml", "exceptions/golem-build.yaml", "kustomization.yaml"}
     assert keys["files"]["keys/meru-signing-keys.yaml"].endswith(
         "  golem: |\n    -----BEGIN PUBLIC KEY-----\n    GOLEM\n    -----END PUBLIC KEY-----\n"
@@ -226,14 +229,16 @@ async def test_an_app_already_trusted_is_kept_without_a_pr(monkeypatch: pytest.M
 
 async def test_an_open_or_rejected_pr_is_never_proposed_again(monkeypatch: pytest.MonkeyPatch):
     pulls = {
-        "meru": [{"number": 4, "title": "onboard golem: fence", "state": "open"}],
-        "kyverno": [{"number": 2, "title": "onboard golem: signing key", "state": "closed", "merged": False}],
+        "meru": [{"number": 4, "title": "chore(trust): onboard golem - fence", "state": "open"}],
+        "kyverno": [
+            {"number": 2, "title": "chore(trust): onboard golem - signing key", "state": "closed", "merged": False}
+        ],
     }
     result, opened = await onboard_trust(monkeypatch, TRUST_REPOS, pulls)
     assert result.startswith(
         "fence waiting on Meru/meru#4; key Meru/kyverno#2 was closed unmerged - not proposed again; push rule proposed"
     )
-    assert [pr["title"] for pr in opened] == ["onboard golem: push rule"]
+    assert [pr["title"] for pr in opened] == ["chore(trust): onboard golem - push rule"]
 
 
 async def test_another_key_for_the_app_is_never_swapped_in(monkeypatch: pytest.MonkeyPatch):
@@ -404,12 +409,17 @@ async def test_retiring_trust_proposes_three_removal_prs(tmp_path: Path, monkeyp
         opened.append({"topic": topic, "title": title, "files": files, "description": description})
 
     monkeypatch.setattr("shikigami.activities.open_pr", fake_open_pr)
-    pulls = {"meru": [{"number": 21, "title": "onboard golem: fence", "state": "closed", "merged": True}]}
+    pulls = {
+        "meru": [{"number": 21, "title": "chore(trust): onboard golem - fence", "state": "closed", "merged": True}]
+    }
     activities, _ = retiring(tmp_path, {}, pulls=pulls, public=TRUSTED_GOLEM)
     result = await ActivityEnvironment().run(activities.retire_trust, "golem")
     assert result == "fence proposed in Meru/meru; key proposed in Meru/kyverno; push rule proposed in Meru/zot"
     fence, keys, push = opened
-    assert (fence["title"], fence["topic"]) == ("retire golem: fence", "retire-golem")  # the merged onboard PR is older
+    assert (fence["title"], fence["topic"]) == (
+        "chore(trust): retire golem - fence",
+        "retire-golem",
+    )  # the merged onboard PR is older
     assert fence["files"] == {"projects/golem.yaml": None, "kustomization.yaml": "resources:\n  - projects/echo.yaml\n"}
     assert keys["files"]["exceptions/golem-build.yaml"] is None
     assert "golem" not in keys["files"]["keys/meru-signing-keys.yaml"]
@@ -420,8 +430,8 @@ async def test_retiring_trust_proposes_three_removal_prs(tmp_path: Path, monkeyp
 async def test_a_restore_proposes_onboarding_again_after_a_merged_retire(monkeypatch: pytest.MonkeyPatch):
     pulls = {
         "meru": [
-            {"number": 21, "title": "onboard golem: fence", "state": "closed", "merged": True},
-            {"number": 30, "title": "retire golem: fence", "state": "closed", "merged": True},
+            {"number": 21, "title": "chore(trust): onboard golem - fence", "state": "closed", "merged": True},
+            {"number": 30, "title": "chore(trust): retire golem - fence", "state": "closed", "merged": True},
         ]
     }
     result, _ = await onboard_trust(monkeypatch, TRUST_REPOS, pulls)
