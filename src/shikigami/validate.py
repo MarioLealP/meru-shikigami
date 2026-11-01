@@ -6,11 +6,10 @@ The repo holds requests and nothing else (D35: not a god repo), so anything that
 
 import sys
 from collections import Counter
-from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from shikigami.request_format import App, Database
 
@@ -34,13 +33,12 @@ def _load(path: Path, model: type[App] | type[Database], problems: list[str]) ->
     return request
 
 
-@dataclass
-class Loaded:
+class Loaded(BaseModel):
     """Every request in a checkout, and what's wrong with it - nothing acts on a checkout with problems."""
 
-    apps: dict[str, App] = field(default_factory=dict)
-    databases: dict[str, Database] = field(default_factory=dict)
-    problems: list[str] = field(default_factory=list)
+    apps: dict[str, App] = Field(default_factory=dict)
+    databases: dict[str, Database] = Field(default_factory=dict)
+    problems: list[str] = Field(default_factory=list)
 
 
 def load(repo: Path) -> Loaded:

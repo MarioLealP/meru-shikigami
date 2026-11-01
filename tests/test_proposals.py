@@ -101,5 +101,5 @@ async def test_find_pr_matches_the_exact_title_open_or_closed():
 
     http = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
     found = await find_pr(http, "https://git.test", "Meru", "meru", ["chore(trust): onboard golem - fence"])
-    assert found is not None and found["number"] == 7
+    assert found is not None and found.number == 7
     assert await find_pr(http, "https://git.test", "Meru", "meru", ["chore(trust): onboard other - fence"]) is None

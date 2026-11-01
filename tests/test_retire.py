@@ -5,7 +5,7 @@ import pytest
 import yaml
 
 from shikigami import retire, trust
-from shikigami.argo import not_stopped
+from shikigami.argo import Application, not_stopped
 from shikigami.build_creds import htpasswd_without
 from shikigami.marker import owner_unset, with_owner
 
@@ -69,14 +69,18 @@ def test_a_zot_line_comes_out_and_the_rest_stays():
     assert htpasswd_without(text, "nobody") is None
 
 
-def app(revisions: list[str], sync: str = "Synced", kinds: tuple[str, ...] = ("Service",), phase: str = "Succeeded"):
-    return {
-        "status": {
-            "sync": {"status": sync, "revisions": revisions},
-            "operationState": {"phase": phase},
-            "resources": [{"kind": kind} for kind in kinds],
+def app(
+    revisions: list[str], sync: str = "Synced", kinds: tuple[str, ...] = ("Service",), phase: str = "Succeeded"
+) -> Application:
+    return Application.model_validate(
+        {
+            "status": {
+                "sync": {"status": sync, "revisions": revisions},
+                "operationState": {"phase": phase},
+                "resources": [{"kind": kind} for kind in kinds],
+            }
         }
-    }
+    )
 
 
 @pytest.mark.parametrize(
@@ -88,7 +92,7 @@ def app(revisions: list[str], sync: str = "Synced", kinds: tuple[str, ...] = ("S
         (app(["nuwa", "c0ffee", "sindri"], kinds=("Service", "Deployment", "Job")), "still has Deployment, Job"),
     ],
 )
-def test_the_app_isnt_stopped_until_argo_says_so(found: dict, reason: str):
+def test_the_app_isnt_stopped_until_argo_says_so(found: Application, reason: str):
     assert reason in (not_stopped(found, "c0ffee") or "")
 
 
