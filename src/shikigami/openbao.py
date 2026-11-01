@@ -3,11 +3,12 @@ still at the version that was read, so two workflows never overwrite each other'
 
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from pathlib import Path
 
 import httpx2
+from pydantic import BaseModel
 
+from shikigami.incoming import Incoming
 from shikigami.tokens import EARLY
 
 Token = Callable[[], Awaitable[str]]
@@ -17,10 +18,32 @@ class Conflict(Exception):
     """The entry changed since it was read; read it again and retry."""
 
 
-@dataclass
-class Entry:
+class Entry(BaseModel):
     data: dict[str, str] | None  # None: no entry, or its latest version is deleted
     version: int  # what the next write's cas must be (0 = never written)
+
+
+# OpenBao's answers - only the fields Shikigami reads.
+class _Auth(Incoming):
+    client_token: str
+    lease_duration: int
+
+
+class _Login(Incoming):
+    auth: _Auth
+
+
+class _Metadata(Incoming):
+    version: int = 0
+
+
+class _Secret(Incoming):
+    data: dict[str, str] | None = None
+    metadata: _Metadata = _Metadata()
+
+
+class _Read(Incoming):
+    data: _Secret = _Secret()
 
 
 class KubernetesLogin:
@@ -38,9 +61,9 @@ class KubernetesLogin:
             jwt = self._jwt_file.read_text().strip()
             response = await self._http.post(self._url, json={"role": self._role, "jwt": jwt})
             response.raise_for_status()
-            auth = response.json()["auth"]
-            self._token = token = str(auth["client_token"])
-            self._expires = time.monotonic() + float(auth["lease_duration"])
+            auth = _Login.model_validate_json(response.content).auth
+            self._token = token = auth.client_token
+            self._expires = time.monotonic() + auth.lease_duration
             return token
         return self._token
 
@@ -56,12 +79,11 @@ class KV:
         response = await self._http.get(f"{self._base}/{path}", headers=await self._headers())
         if response.status_code == 404:
             # a deleted latest version still answers 404, but with its metadata - the cas needs that version
-            body = response.json() if response.content else {}
-            metadata = (body.get("data") or {}).get("metadata") or {}
-            return Entry(None, metadata.get("version", 0))
+            found = _Read.model_validate_json(response.content) if response.content else _Read()
+            return Entry(data=None, version=found.data.metadata.version)
         response.raise_for_status()
-        data = response.json()["data"]
-        return Entry(data["data"], data["metadata"]["version"])
+        found = _Read.model_validate_json(response.content)
+        return Entry(data=found.data.data, version=found.data.metadata.version)
 
     async def write(self, path: str, data: dict[str, str], cas: int) -> None:
         response = await self._http.post(

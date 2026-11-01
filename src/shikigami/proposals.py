@@ -10,6 +10,9 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import httpx2
+from pydantic import TypeAdapter
+
+from shikigami.incoming import Incoming
 
 AUTHOR = ("Shikigami (Meru orchestrator)", "shikigami@clockmost.local")  # the bot's Gitea name + email
 
@@ -18,7 +21,19 @@ class ProposalFailed(Exception):
     """git refused (the message is git's, never the token: it travels in a header, not the URL)."""
 
 
-async def find_pr(http: httpx2.AsyncClient, gitea_url: str, org: str, repo: str, titles: list[str]) -> dict | None:
+class Pull(Incoming):
+    """A PR as Gitea lists it - the fields the trust steps look at."""
+
+    number: int
+    title: str
+    state: str  # open | closed
+    merged: bool = False
+
+
+_PULLS = TypeAdapter(list[Pull])
+
+
+async def find_pr(http: httpx2.AsyncClient, gitea_url: str, org: str, repo: str, titles: list[str]) -> Pull | None:
     """The newest PR in a public repo whose title is one of `titles`, open or closed, or None. Asked with both
     directions' titles ("onboard x: ..." and "retire x: ..."), so after a retire and a restore the newest one
     decides."""
@@ -26,8 +41,8 @@ async def find_pr(http: httpx2.AsyncClient, gitea_url: str, org: str, repo: str,
         f"{gitea_url}/api/v1/repos/{org}/{repo}/pulls", params={"state": "all", "sort": "newest", "limit": 50}
     )
     response.raise_for_status()
-    matching = [pr for pr in response.json() if pr["title"] in titles]
-    return max(matching, key=lambda pr: pr["number"]) if matching else None
+    matching = [pr for pr in _PULLS.validate_json(response.content) if pr.title in titles]
+    return max(matching, key=lambda pr: pr.number) if matching else None
 
 
 async def _git(cwd: Path, *args: str, env: dict[str, str] | None = None) -> None:

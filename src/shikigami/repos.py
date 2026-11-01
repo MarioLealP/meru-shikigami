@@ -5,6 +5,43 @@ import base64
 
 import httpx2
 
+from shikigami.incoming import Incoming
+
+
+# Gitea's answers - only the fields Shikigami reads.
+class _RegistrationToken(Incoming):
+    token: str
+
+
+class _Contents(Incoming):
+    content: str  # base64
+    sha: str
+
+
+class _Commit(Incoming):
+    id: str
+
+
+class _Branch(Incoming):
+    commit: _Commit
+
+
+class _Runner(Incoming):
+    id: int
+
+
+class _Runners(Incoming):
+    runners: list[_Runner] | None = None
+
+
+class _Permissions(Incoming):
+    admin: bool = False
+
+
+class _Repo(Incoming):
+    archived: bool = False
+    permissions: _Permissions | None = None
+
 
 class NoTemplate(Exception):
     """The request names a template that isn't a Nüwa template repo (yet)."""
@@ -56,7 +93,7 @@ async def runner_token(http: httpx2.AsyncClient, gitea_url: str, token: str, org
         headers={"Authorization": f"token {token}"},
     )
     response.raise_for_status()
-    return str(response.json()["token"])
+    return _RegistrationToken.model_validate_json(response.content).token
 
 
 async def read_file(
@@ -69,8 +106,8 @@ async def read_file(
     if response.status_code == 404:
         return None
     response.raise_for_status()
-    body = response.json()
-    return base64.b64decode(body["content"]).decode(), str(body["sha"])
+    body = _Contents.model_validate_json(response.content)
+    return base64.b64decode(body.content).decode(), body.sha
 
 
 async def public_file(http: httpx2.AsyncClient, gitea_url: str, org: str, repo: str, path: str) -> str | None:
@@ -131,7 +168,7 @@ async def head(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, r
         f"{gitea_url}/api/v1/repos/{org}/{repo}/branches/{branch}", headers={"Authorization": f"token {token}"}
     )
     response.raise_for_status()
-    return str(response.json()["commit"]["id"])
+    return _Branch.model_validate_json(response.content).commit.id
 
 
 async def delete_runners(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str) -> int:
@@ -141,9 +178,9 @@ async def delete_runners(http: httpx2.AsyncClient, gitea_url: str, token: str, o
     headers = {"Authorization": f"token {token}"}
     response = await http.get(base, headers=headers)
     response.raise_for_status()
-    runners = response.json().get("runners") or []
+    runners = _Runners.model_validate_json(response.content).runners or []
     for runner in runners:
-        (await http.delete(f"{base}/{runner['id']}", headers=headers)).raise_for_status()
+        (await http.delete(f"{base}/{runner.id}", headers=headers)).raise_for_status()
     return len(runners)
 
 
@@ -152,7 +189,7 @@ async def archive(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str
     url, headers = f"{gitea_url}/api/v1/repos/{org}/{repo}", {"Authorization": f"token {token}"}
     current = await http.get(url, headers=headers)
     current.raise_for_status()
-    if current.json().get("archived"):
+    if _Repo.model_validate_json(current.content).archived:
         return False
     (await http.patch(url, headers=headers, json={"archived": True})).raise_for_status()
     return True
@@ -168,7 +205,8 @@ async def is_admin(http: httpx2.AsyncClient, gitea_url: str, token: str, org: st
     if response.status_code == 404:
         return False
     response.raise_for_status()
-    return bool((response.json().get("permissions") or {}).get("admin"))
+    permissions = _Repo.model_validate_json(response.content).permissions
+    return permissions is not None and permissions.admin
 
 
 async def protect_main(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str) -> str:

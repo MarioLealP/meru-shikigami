@@ -1,5 +1,5 @@
 # Shikigami's CI on Meru's runner (Sindri, namespace shikigami-build: each job is its own pod).
-# checks: everything scripts/check.sh runs locally - lint, format, types, lockfile, tests (incl. the workflows in
+# checks: everything scripts/check.sh runs locally - lint, format, types, lockfile, pip-audit, tests (incl. the workflows in
 # Temporal's test server), generated schema. No credentials in this pod.
 # build: after the checks. Pull requests: build only. Main: fetch Shikigami's Zot login + signing key from OpenBao
 # (into memory), build, push to Zot, sign, then write the new digest into deploy/values.yaml - Argo CD rolls that

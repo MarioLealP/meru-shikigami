@@ -177,12 +177,12 @@ class Activities:
         # the newest PR of either direction decides: after a retire and a restore, the old onboard PR doesn't count
         titles = [trust_title(d, app, what) for d in PROPOSALS]
         pr = await find_pr(self._http, s.gitea_url, s.apps_org, repo, titles)
-        if pr is not None and pr["title"] == title:
-            if pr["state"] == "open":
-                return f"waiting on {where}#{pr['number']}"
-            if pr.get("merged"):
-                return f"{where}#{pr['number']} merged, not on main yet"
-            return f"{where}#{pr['number']} was closed unmerged - not proposed again"
+        if pr is not None and pr.title == title:
+            if pr.state == "open":
+                return f"waiting on {where}#{pr.number}"
+            if pr.merged:
+                return f"{where}#{pr.number} merged, not on main yet"
+            return f"{where}#{pr.number} was closed unmerged - not proposed again"
         try:
             await open_pr(
                 f"{s.gitea_url}/{where}.git",

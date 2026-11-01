@@ -6,9 +6,30 @@ import tempfile
 from pathlib import Path
 
 import httpx2
+from pydantic import Field, TypeAdapter
 
+from shikigami.incoming import Incoming
 from shikigami.models import ExistingApp, RequestsSnapshot
 from shikigami.validate import load
+
+
+class _Commit(Incoming):
+    id: str
+
+
+class _Branch(Incoming):
+    commit: _Commit
+
+
+class _Item(Incoming):
+    """A Thoth item, as /v1/items lists it."""
+
+    key: str
+    status: str
+    attributes: dict[str, object] = Field(default_factory=dict)
+
+
+_ITEMS = TypeAdapter(list[_Item])
 
 
 async def read_requests(
@@ -18,7 +39,7 @@ async def read_requests(
     headers = {"Authorization": f"token {token}"}
     branch_info = await http.get(f"{gitea_url}/api/v1/repos/{repo}/branches/{branch}", headers=headers)
     branch_info.raise_for_status()
-    commit = branch_info.json()["commit"]["id"]
+    commit = _Branch.model_validate_json(branch_info.content).commit.id
     archive = await http.get(f"{gitea_url}/api/v1/repos/{repo}/archive/{commit}.tar.gz", headers=headers)
     archive.raise_for_status()
     with tempfile.TemporaryDirectory() as tmp, tarfile.open(fileobj=io.BytesIO(archive.content)) as tar:
@@ -33,10 +54,13 @@ async def read_existing_apps(http: httpx2.AsyncClient, thoth_url: str, token: st
         f"{thoth_url}/v1/items", params={"type": "app", "limit": 1000}, headers={"Authorization": f"Bearer {token}"}
     )
     response.raise_for_status()
-    return {
-        item["key"]: ExistingApp(key=item["key"], status=item["status"], template=item["attributes"].get("template"))
-        for item in response.json()
-    }
+    apps = {}
+    for item in _ITEMS.validate_json(response.content):
+        template = item.attributes.get("template")
+        apps[item.key] = ExistingApp(
+            key=item.key, status=item.status, template=template if isinstance(template, str) else None
+        )
+    return apps
 
 
 async def declare_apps(http: httpx2.AsyncClient, thoth_url: str, token: str, snapshot: RequestsSnapshot) -> dict:

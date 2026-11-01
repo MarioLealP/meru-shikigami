@@ -5,7 +5,14 @@ import time
 import httpx2
 from pydantic import SecretStr
 
+from shikigami.incoming import Incoming
+
 EARLY = 60  # seconds before expiry when a token counts as used up
+
+
+class _TokenAnswer(Incoming):
+    access_token: str
+    expires_in: int = 600
 
 
 class TokenSource:
@@ -30,8 +37,8 @@ class TokenSource:
                 },
             )
             response.raise_for_status()
-            body = response.json()
-            self._token = token = str(body["access_token"])
-            self._expires = time.monotonic() + float(body.get("expires_in", 600))
+            body = _TokenAnswer.model_validate_json(response.content)
+            self._token = token = body.access_token
+            self._expires = time.monotonic() + body.expires_in
             return token
         return self._token
