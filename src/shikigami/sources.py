@@ -3,10 +3,13 @@
 import io
 import tarfile
 import tempfile
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Annotated
 
 import httpx2
-from pydantic import Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, TypeAdapter
 
 from shikigami.incoming import Incoming
 from shikigami.models import ExistingApp, RequestsSnapshot
@@ -32,10 +35,11 @@ class _Item(Incoming):
 _ITEMS = TypeAdapter(list[_Item])
 
 
-async def read_requests(
+@asynccontextmanager
+async def requests_checkout(
     http: httpx2.AsyncClient, gitea_url: str, repo: str, branch: str, token: str
-) -> RequestsSnapshot:
-    """The branch's latest commit, downloaded as one archive and checked with the same library as the gate (D69)."""
+) -> AsyncGenerator[tuple[str, Path]]:
+    """The branch's latest commit, downloaded as one archive into a temporary folder: (commit, the repo's root)."""
     headers = {"Authorization": f"token {token}"}
     branch_info = await http.get(f"{gitea_url}/api/v1/repos/{repo}/branches/{branch}", headers=headers)
     branch_info.raise_for_status()
@@ -45,8 +49,49 @@ async def read_requests(
     with tempfile.TemporaryDirectory() as tmp, tarfile.open(fileobj=io.BytesIO(archive.content)) as tar:
         tar.extractall(tmp, filter="data")  # refuses links out, absolute paths, devices
         roots = list(Path(tmp).iterdir())  # Gitea wraps everything in one <repo>/ folder
-        loaded = load(roots[0] if len(roots) == 1 and roots[0].is_dir() else Path(tmp))
+        yield commit, roots[0] if len(roots) == 1 and roots[0].is_dir() else Path(tmp)
+
+
+async def read_requests(
+    http: httpx2.AsyncClient, gitea_url: str, repo: str, branch: str, token: str
+) -> RequestsSnapshot:
+    """The branch's latest commit, checked with the same library as the gate (D69)."""
+    async with requests_checkout(http, gitea_url, repo, branch, token) as (commit, root):
+        loaded = load(root)
     return RequestsSnapshot(commit=commit, apps=loaded.apps, databases=loaded.databases, problems=loaded.problems)
+
+
+class Proposal(BaseModel):
+    """One request file someone wants on the requests repo (Janus asks before opening its PR, D96)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    path: Annotated[str, StringConstraints(pattern=r"^(apps|databases)/[a-z0-9]([-a-z0-9]*[a-z0-9])?\.yaml$")]
+    content: Annotated[str, StringConstraints(max_length=65536)]
+
+
+class Verdict(BaseModel):
+    """What the proposal would add to the problems of the requests repo's main - none = it may go in."""
+
+    model_config = ConfigDict(frozen=True)
+
+    commit: str  # the main it was checked against
+    problems: list[str]
+
+
+async def check_proposal(
+    http: httpx2.AsyncClient, gitea_url: str, repo: str, branch: str, token: str, proposal: Proposal
+) -> Verdict:
+    """The proposal checked together with every request on main, by the same load() a sync uses - so the checks
+    across files (one host per app, a database's app) count too. Problems main already has aren't blamed on it."""
+    async with requests_checkout(http, gitea_url, repo, branch, token) as (commit, root):
+        before = set(load(root).problems)
+        target = root / proposal.path
+        target.parent.mkdir(exist_ok=True)
+        target.write_text(proposal.content)
+        after = load(root).problems
+        prefix = f"{root}/"
+    return Verdict(commit=commit, problems=[p.replace(prefix, "") for p in after if p not in before])
 
 
 async def read_existing_apps(http: httpx2.AsyncClient, thoth_url: str, token: str) -> dict[str, ExistingApp]:
