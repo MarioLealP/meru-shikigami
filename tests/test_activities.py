@@ -357,14 +357,62 @@ ARGO_RUNNING = {
 }
 
 
-async def test_a_repo_shikigami_left_is_not_retired_blind(tmp_path: Path):
-    # its reads would come back empty there and pass for "parked" (D89) - refused until the stop + park are PRs
-    activities, calls = retiring(
-        tmp_path, {"deploy/meru.yaml": GOLEM_MARKER, "deploy/values.yaml": GOLEM_VALUES}, admin=False
+def opened_prs(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+    opened: list[dict] = []
+
+    async def fake_open_pr(remote, user, token, topic, title, description, files):
+        opened.append({"remote": remote, "topic": topic, "title": title, "files": files})
+
+    monkeypatch.setattr("shikigami.activities.open_pr", fake_open_pr)
+    return opened
+
+
+PUBLIC_GOLEM = {"golem/raw/deploy/meru.yaml": GOLEM_MARKER, "golem/raw/deploy/values.yaml": GOLEM_VALUES}
+
+
+async def test_a_repo_shikigami_stepped_down_from_gets_the_stop_as_a_pr(tmp_path: Path, monkeypatch):
+    opened = opened_prs(monkeypatch)
+    activities, calls = retiring(tmp_path, {}, public=PUBLIC_GOLEM, admin=False)
+    assert await ActivityEnvironment().run(activities.retire_stop, "golem") == "proposed in Meru/golem"
+    [pr] = opened
+    assert (pr["remote"], pr["topic"], pr["title"]) == (
+        "https://git.test/Meru/golem.git",
+        "retire-stop-golem",
+        "chore(retire): stop golem",
     )
-    with pytest.raises(ApplicationError, match="left Meru/golem at onboarding") as raised:
-        await ActivityEnvironment().run(activities.retire_stop, "golem")
-    assert raised.value.non_retryable
+    assert "enabled: false" in pr["files"]["deploy/values.yaml"] and "build: false" in pr["files"]["deploy/meru.yaml"]
+    assert calls == []  # nothing committed straight to main
+
+
+async def test_an_open_stop_pr_is_waited_on_not_opened_again(tmp_path: Path, monkeypatch):
+    opened = opened_prs(monkeypatch)
+    pulls = {"golem": [{"number": 3, "title": "chore(retire): stop golem", "state": "open"}]}
+    activities, _ = retiring(tmp_path, {}, public=PUBLIC_GOLEM, pulls=pulls, admin=False)
+    assert await ActivityEnvironment().run(activities.retire_stop, "golem") == "waiting on Meru/golem#3"
+    assert opened == []
+
+
+async def test_a_merged_stop_is_kept_and_the_park_is_the_next_pr(tmp_path: Path, monkeypatch):
+    opened = opened_prs(monkeypatch)
+    stopped = {
+        "golem/raw/deploy/meru.yaml": "owner: mario\nchart: nuwa-app-0.9.0\nbuild: false # retired\n",
+        "golem/raw/deploy/values.yaml": "name: golem\nowner: mario\nenabled: false # retired\n",
+    }
+    activities, _ = retiring(tmp_path, {}, public=stopped, admin=False)
+    assert await ActivityEnvironment().run(activities.retire_stop, "golem") == "kept"
+    assert await ActivityEnvironment().run(activities.retire_park_marker, "golem") == "proposed in Meru/golem"
+    [pr] = opened
+    assert pr["title"] == "chore(retire): park golem"
+    assert pr["files"] == {
+        "deploy/meru.yaml.in": 'owner: ""\nchart: nuwa-app-0.9.0\nbuild: true\n',
+        "deploy/meru.yaml": None,
+    }
+
+
+async def test_runner_records_and_archiving_are_left_to_charon_without_admin(tmp_path: Path):
+    activities, calls = retiring(tmp_path, {}, admin=False)
+    assert await ActivityEnvironment().run(activities.retire_runner, "golem") == 0
+    assert await ActivityEnvironment().run(activities.retire_archive, "golem") is False
     assert calls == []
 
 
@@ -478,20 +526,20 @@ def locking(admin: bool, users: set[str]) -> tuple[Activities, list[tuple[str, s
 async def test_lock_out_protects_hands_over_and_leaves_in_that_order():
     activities, writes = locking(admin=True, users={"xolotl"})
     result = await ActivityEnvironment().run(activities.lock_out, "echo")
-    assert result == "main protection added, xolotl given Write, Shikigami left"
+    assert result == "main protection added, xolotl given Write, Shikigami down to Read"
     # each step needs the admin right the last one gives up
     assert writes == [
         ("POST", "/branch_protections"),
         ("PUT", "/collaborators/xolotl"),
-        ("DELETE", "/collaborators/shikigami"),
+        ("PUT", "/collaborators/shikigami"),
     ]
 
 
 async def test_lock_out_still_leaves_before_the_merger_exists():
     activities, writes = locking(admin=True, users=set())
     result = await ActivityEnvironment().run(activities.lock_out, "echo")
-    assert result == "main protection added, xolotl skipped (no such user yet), Shikigami left"
-    assert [w[0] for w in writes] == ["POST", "DELETE"]
+    assert result == "main protection added, xolotl skipped (no such user yet), Shikigami down to Read"
+    assert [w[0] for w in writes] == ["POST", "PUT"]
 
 
 async def test_lock_out_is_kept_once_shikigami_is_not_admin():

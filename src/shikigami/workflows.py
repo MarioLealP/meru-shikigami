@@ -94,15 +94,21 @@ class AppWorkflow:
                 method, app, start_to_close_timeout=TIMEOUT, retry_policy=retry_policy
             )
 
-        workflow.logger.info("app %s: retire - stop %s", app, await step(Activities.retire_stop))
+        stop = await step(Activities.retire_stop)
+        workflow.logger.info("app %s: retire - stop %s", app, stop)
+        if not (stop.startswith("kept") or stop == "written"):  # a PR (cm-konk): Xolotl's merge pings the next pass
+            return
         workflow.logger.info("app %s: retire - Argo %s", app, await step(Activities.retire_wait_stopped, WAIT_STOPPED))
-        workflow.logger.info("app %s: retire - marker %s", app, await step(Activities.retire_park_marker))
+        marker = await step(Activities.retire_park_marker)
+        workflow.logger.info("app %s: retire - marker %s", app, marker)
+        if marker not in ("kept", "parked"):  # a PR, as above
+            return
         workflow.logger.info("app %s: retire - %s", app, await step(Activities.retire_trust))
         workflow.logger.info("app %s: retire - %d runner(s) removed", app, await step(Activities.retire_runner))
         zot = await step(BuildActivities.revoke_zot_login)
         workflow.logger.info("app %s: retire - Zot login %s", app, "revoked" if zot else "already gone")
         archived = await step(Activities.retire_archive)
-        workflow.logger.info("app %s: retire - repo %s", app, "archived" if archived else "already archived")
+        workflow.logger.info("app %s: retire - repo %s", app, "archived" if archived else "not archived here")
 
 
 @workflow.defn

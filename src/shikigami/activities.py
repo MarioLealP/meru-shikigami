@@ -19,6 +19,7 @@ from shikigami.repos import (
     NoTemplate,
     add_writer,
     archive,
+    become_reader,
     change,
     commit_files,
     delete_runners,
@@ -26,7 +27,6 @@ from shikigami.repos import (
     ensure_repo,
     head,
     is_admin,
-    leave,
     protect_main,
     public_file,
     read_file,
@@ -55,10 +55,27 @@ Shikigami proposing it again."""
 
 PROPOSALS = {"onboard": PROPOSAL, "retire": RETIREMENT}
 
+STOP = """Shikigami's retirement of `{app}` (D85, cm-konk): the stop - `enabled: false` (no workload) and `build: false`
+(no runner). The app's request is marked removed on Meru/requests.
+
+Shikigami only reads this repo since onboarding (D89), so this is a proposal; Xolotl merges it once it matches the
+rebuild from main and the request backs it. After Argo has applied it, the marker is parked in a second PR."""
+
+PARK = """Shikigami's retirement of `{app}` (D85, cm-konk): the marker goes back to the template's
+`deploy/meru.yaml.in`, so Meru stops deploying the repo. Onboarding again undoes it.
+
+Opened only after Argo applied the stop. Xolotl merges it once it matches the rebuild from main."""
+
 
 def trust_title(direction: str, app: str, what: str) -> str:
     """A trust PR's title, in the repos' Conventional Commits form - Xolotl reads it back to know what to rebuild."""
     return f"chore(trust): {direction} {app} - {what}"
+
+
+def retire_title(step: str, app: str) -> str:
+    """A retire PR's title in the app's own repo (cm-konk): `chore(retire): stop <app>` / `chore(retire): park <app>`
+    - Xolotl reads it back to know what to rebuild."""
+    return f"chore(retire): {step} {app}"
 
 
 class Activities:
@@ -184,10 +201,23 @@ class Activities:
     ) -> str:
         if not files:
             return "kept"
-        s = self._settings
-        where, title = f"{s.apps_org}/{repo}", trust_title(direction, app, what)
         # the newest PR of either direction decides: after a retire and a restore, the old onboard PR doesn't count
-        titles = [trust_title(d, app, what) for d in PROPOSALS]
+        return await self._open_once(
+            repo,
+            trust_title(direction, app, what),
+            [trust_title(d, app, what) for d in PROPOSALS],
+            f"{direction}-{app}",
+            PROPOSALS[direction].format(app=app, what=what, files="\n".join(f"- `{path}`" for path in files)),
+            files,
+        )
+
+    async def _open_once(
+        self, repo: str, title: str, titles: list[str], topic: str, description: str, files: Mapping[str, str | None]
+    ) -> str:
+        """One AGit PR with `title`, unless the newest PR among `titles` already is one: open -> waiting on it,
+        merged -> not on main yet, closed unmerged -> a rejection, never proposed again."""
+        s = self._settings
+        where = f"{s.apps_org}/{repo}"
         pr = await find_pr(self._http, s.gitea_url, s.apps_org, repo, titles)
         if pr is not None and pr.title == title:
             if pr.state == "open":
@@ -200,14 +230,14 @@ class Activities:
                 f"{s.gitea_url}/{where}.git",
                 s.gitea_user,
                 s.gitea_token.get_secret_value(),
-                f"{direction}-{app}",
+                topic,
                 title,
-                PROPOSALS[direction].format(app=app, what=what, files="\n".join(f"- `{path}`" for path in files)),
+                description,
                 files,
             )
         except ProposalFailed as e:
             raise ApplicationError(str(e)) from e  # retried: a push can fail on the network too
-        activity.logger.info("%s: %s %s proposed in %s", app, direction, what, where)
+        activity.logger.info("%s proposed in %s", title, where)
         return f"proposed in {where}"
 
     # The retire pass (D85), in this order, each step keeping what's done: stop -> wait for Argo -> park the marker ->
@@ -215,16 +245,13 @@ class Activities:
 
     @activity.defn
     async def retire_stop(self, app: str) -> str:
-        """One commit: `enabled: false` (no workload) + `build: false` (no runner). Kept once both are there, or once
-        the marker is parked (a later pass). A repo Shikigami left at onboarding (D89) is refused: there its reads
-        come back empty, which would pass for "parked" - retiring those needs the stop + park as PRs (next step)."""
+        """`enabled: false` (no workload) + `build: false` (no runner): one commit while Shikigami still administers
+        the repo, else a PR Xolotl merges (cm-konk) - "proposed in"/"waiting on" means the pass stops here until it's
+        merged. Kept once both are there, or once the marker is parked (a later pass)."""
         s = self._settings
         token, org = s.gitea_token.get_secret_value(), s.apps_org
         if not await is_admin(self._http, s.gitea_url, token, org, app):
-            raise ApplicationError(
-                f"Shikigami left {org}/{app} at onboarding (D89): retiring it needs the stop + park as PRs (not built)",
-                non_retryable=True,
-            )
+            return await self._ping_merger(await self._stop_pr(app))
         marker_file = await read_file(self._http, s.gitea_url, token, org, app, "deploy/meru.yaml")
         if marker_file is None:
             return "kept (marker parked)"
@@ -247,6 +274,39 @@ class Activities:
         await commit_files(self._http, s.gitea_url, token, org, app, message, files)
         return "written"
 
+    async def _public(self, app: str, path: str) -> str | None:
+        return await public_file(self._http, self._settings.gitea_url, self._settings.apps_org, app, path)
+
+    async def _stop_pr(self, app: str) -> str:
+        marker_text = await self._public(app, "deploy/meru.yaml")
+        if marker_text is None:
+            return "kept (marker parked)"
+        values = await self._public(app, "deploy/values.yaml")
+        if values is None:
+            raise ApplicationError(f"Meru/{app} has no deploy/values.yaml", non_retryable=True)
+        if retire.is_stopped(values, marker_text):
+            return "kept"
+        try:
+            files = {
+                "deploy/values.yaml": retire.stopped_values(values),
+                "deploy/meru.yaml": retire.stopped_marker(marker_text),
+            }
+        except trust.BadLayout as e:
+            raise ApplicationError(str(e), non_retryable=True) from e
+        title = retire_title("stop", app)
+        return await self._open_once(app, title, [title], f"retire-stop-{app}", STOP.format(app=app), files)
+
+    async def _park_pr(self, app: str) -> str:
+        marker_text = await self._public(app, "deploy/meru.yaml")
+        if marker_text is None:
+            return "kept"
+        try:
+            files: dict[str, str | None] = {"deploy/meru.yaml.in": retire.parked(marker_text), "deploy/meru.yaml": None}
+        except trust.BadLayout as e:
+            raise ApplicationError(str(e), non_retryable=True) from e
+        title = retire_title("park", app)
+        return await self._open_once(app, title, [title], f"retire-park-{app}", PARK.format(app=app), files)
+
     @activity.defn
     async def retire_wait_stopped(self, app: str) -> str:
         """Until Argo has synced the repo's current main with no workload left - retried by the workflow (30 s apart).
@@ -259,7 +319,7 @@ class Activities:
         )
         if found is None:
             return "gone"
-        commit = await head(self._http, s.gitea_url, s.gitea_token.get_secret_value(), s.apps_org, app)
+        commit = await head(self._http, s.gitea_url, None, s.apps_org, app)  # public: Shikigami may have left (D89)
         reason = not_stopped(found, commit)
         if reason:
             raise ApplicationError(f"app-{app} not stopped yet: {reason}")
@@ -267,10 +327,12 @@ class Activities:
 
     @activity.defn
     async def retire_park_marker(self, app: str) -> str:
-        """deploy/meru.yaml -> deploy/meru.yaml.in (one commit): the ApplicationSet drops the app. Only after
-        retire_wait_stopped."""
+        """deploy/meru.yaml -> deploy/meru.yaml.in: the ApplicationSet drops the app. Only after retire_wait_stopped.
+        One commit while Shikigami administers the repo, else a PR Xolotl merges (cm-konk)."""
         s = self._settings
         token, org = s.gitea_token.get_secret_value(), s.apps_org
+        if not await is_admin(self._http, s.gitea_url, token, org, app):
+            return await self._ping_merger(await self._park_pr(app))
         marker_file = await read_file(self._http, s.gitea_url, token, org, app, "deploy/meru.yaml")
         if marker_file is None:
             return "kept"
@@ -320,15 +382,25 @@ class Activities:
 
     @activity.defn
     async def retire_runner(self, app: str) -> int:
-        """Remove the repo's runners from Gitea (the runner pod is already gone with build: false)."""
+        """Remove the repo's runners from Gitea (the runner pod is already gone with build: false). Needs repo admin:
+        in a repo Shikigami left (D89) the offline record stays for Charon to clear at purge (cm-konk)."""
         s = self._settings
-        return await delete_runners(self._http, s.gitea_url, s.gitea_token.get_secret_value(), s.apps_org, app)
+        token = s.gitea_token.get_secret_value()
+        if not await is_admin(self._http, s.gitea_url, token, s.apps_org, app):
+            activity.logger.info("%s: runner records left to Charon (Shikigami isn't admin)", app)
+            return 0
+        return await delete_runners(self._http, s.gitea_url, token, s.apps_org, app)
 
     @activity.defn
     async def retire_archive(self, app: str) -> bool:
-        """Archive the repo - last: nothing is written to it after this."""
+        """Archive the repo - last: nothing is written to it after this. Needs repo admin: a repo Shikigami left
+        (D89) is archived by Charon at purge instead (cm-konk)."""
         s = self._settings
-        return await archive(self._http, s.gitea_url, s.gitea_token.get_secret_value(), s.apps_org, app)
+        token = s.gitea_token.get_secret_value()
+        if not await is_admin(self._http, s.gitea_url, token, s.apps_org, app):
+            activity.logger.info("%s: archiving left to Charon (Shikigami isn't admin)", app)
+            return False
+        return await archive(self._http, s.gitea_url, token, s.apps_org, app)
 
     @activity.defn
     async def ensure_deploy_files(self, app: str, owner: str, public_key: str) -> str:
@@ -402,17 +474,17 @@ class Activities:
     @activity.defn
     async def lock_out(self, app: str) -> str:
         """The last onboarding step (D89), once the marker is in: protect main (force push off), give the merger
-        Write, and leave the repo. Kept once Shikigami isn't admin there any more - whoever made the repo (Mario's own
-        repos never had Shikigami) or after it left."""
+        Write, and drop Shikigami to Read - it can still propose (retire PRs, cm-konk), never push. Kept once
+        Shikigami isn't admin there any more - whoever made the repo or after it stepped down."""
         s = self._settings
         token, org = s.gitea_token.get_secret_value(), s.apps_org
         if not await is_admin(self._http, s.gitea_url, token, org, app):
             return "kept"
         protected = await protect_main(self._http, s.gitea_url, token, org, app)
         merger = await add_writer(self._http, s.gitea_url, token, org, app, s.merger_user)
-        await leave(self._http, s.gitea_url, token, org, app, s.gitea_user)
+        await become_reader(self._http, s.gitea_url, token, org, app, s.gitea_user)
         added = "given Write" if merger else "skipped (no such user yet)"
-        return f"main protection {protected}, {s.merger_user} {added}, Shikigami left"
+        return f"main protection {protected}, {s.merger_user} {added}, Shikigami down to Read"
 
     @activity.defn
     async def dry_run(self, action: AppAction) -> None:
