@@ -195,6 +195,40 @@ async def archive(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str
     return True
 
 
+class BuildRun(Incoming):
+    """A CI run as Gitea lists it. `run_attempt` counts re-runs of the same run (1 = never re-run)."""
+
+    id: int
+    status: str  # queued | waiting | in_progress | completed
+    conclusion: str | None = None  # success | failure | cancelled | skipped, once completed
+    run_attempt: int = 1
+
+
+class _BuildRuns(Incoming):
+    workflow_runs: list[BuildRun] | None = None
+
+
+async def dispatched_run(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str) -> BuildRun | None:
+    """The newest hand-started ("Run workflow") run on main - the app's first build, which Shikigami dispatches."""
+    response = await http.get(
+        f"{gitea_url}/api/v1/repos/{org}/{repo}/actions/runs",
+        params={"event": "workflow_dispatch", "branch": "main", "limit": 1},
+        headers={"Authorization": f"token {token}"},
+    )
+    response.raise_for_status()
+    runs = _BuildRuns.model_validate_json(response.content).workflow_runs or []
+    return runs[0] if runs else None
+
+
+async def rerun_failed(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str, run: int) -> None:
+    """Re-run a run's failed jobs (its run_attempt goes up by one); the jobs that passed keep their result."""
+    response = await http.post(
+        f"{gitea_url}/api/v1/repos/{org}/{repo}/actions/runs/{run}/rerun-failed-jobs",
+        headers={"Authorization": f"token {token}"},
+    )
+    response.raise_for_status()
+
+
 # The end of onboarding (D89): Shikigami protects main, hands Write to the merger and leaves the repo - from then on
 # a hijacked Shikigami can't push, force-push or change settings there.
 

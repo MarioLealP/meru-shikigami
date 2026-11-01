@@ -22,6 +22,7 @@ from shikigami.repos import (
     change,
     commit_files,
     delete_runners,
+    dispatched_run,
     ensure_repo,
     head,
     is_admin,
@@ -29,6 +30,7 @@ from shikigami.repos import (
     protect_main,
     public_file,
     read_file,
+    rerun_failed,
     run_workflow,
 )
 from shikigami.sources import declare_apps, read_existing_apps, read_requests
@@ -372,6 +374,30 @@ class Activities:
         await run_workflow(self._http, s.gitea_url, token, org, app, "ci.yaml")
         activity.logger.info("%s: first build started", app)
         return "written, first build started"
+
+    @activity.defn
+    async def first_build(self, app: str) -> str:
+        """D90: the app's first build, before Shikigami leaves the repo (after that nobody automated can re-run it).
+        Passed -> done. Failed -> its failed jobs re-run, up to first_build_reruns times (Gitea counts the attempts,
+        so nothing is remembered here). Still running, or just re-run -> an error, and the workflow's retry policy
+        asks again a minute later. Not admin any more -> nothing to wait for."""
+        s = self._settings
+        token, org = s.gitea_token.get_secret_value(), s.apps_org
+        if not await is_admin(self._http, s.gitea_url, token, org, app):
+            return "not watched (Shikigami already left the repo)"
+        run = await dispatched_run(self._http, s.gitea_url, token, org, app)
+        if run is None:
+            return "none to wait for (no hand-started run on main)"
+        attempt = f"attempt {run.run_attempt}"
+        if run.status != "completed":
+            raise ApplicationError(f"first build {run.status} ({attempt})")
+        if run.conclusion == "success":
+            return f"passed ({attempt})"
+        if run.run_attempt > s.first_build_reruns:
+            return f"{run.conclusion} after {run.run_attempt} attempts - left to the owner"
+        await rerun_failed(self._http, s.gitea_url, token, org, app, run.id)
+        activity.logger.warning("%s: first build %s (%s), failed jobs re-run", app, run.conclusion, attempt)
+        raise ApplicationError(f"first build {run.conclusion} ({attempt}), re-run")
 
     @activity.defn
     async def lock_out(self, app: str) -> str:

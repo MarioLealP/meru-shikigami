@@ -16,7 +16,7 @@ from shikigami.repos import runner_token
 from shikigami.temporal import connect, ensure_nightly, keep_token_fresh
 from shikigami.tokens import TokenSource
 from shikigami.web import make_app
-from shikigami.workflows import AppWorkflow, OnboardBuild, RequestsSync
+from shikigami.workflows import AppWorkflow, FirstBuild, OnboardBuild, RequestsSync
 
 
 async def run() -> None:
@@ -48,7 +48,7 @@ async def run() -> None:
         worker = Worker(
             client,
             task_queue=settings.task_queue,
-            workflows=[RequestsSync, AppWorkflow, OnboardBuild],
+            workflows=[RequestsSync, AppWorkflow, OnboardBuild, FirstBuild],
             activities=[
                 activities.read_requests,
                 activities.read_existing_apps,
@@ -56,6 +56,7 @@ async def run() -> None:
                 activities.ensure_repo,
                 activities.ensure_trust,
                 activities.ensure_deploy_files,
+                activities.first_build,
                 activities.lock_out,
                 activities.retire_stop,
                 activities.retire_wait_stopped,

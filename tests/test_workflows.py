@@ -1,15 +1,18 @@
 import uuid
+from contextlib import suppress
 
 import pytest
 from temporalio import activity
 from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
+from temporalio.exceptions import ApplicationError
+from temporalio.service import RPCError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
 from shikigami.models import AppAction, ExistingApp, RequestsSnapshot
 from shikigami.request_format import App
-from shikigami.workflows import AppWorkflow, OnboardBuild, RequestsSync, fingerprint
+from shikigami.workflows import AppWorkflow, FirstBuild, OnboardBuild, RequestsSync, fingerprint
 
 ECHO = App.model_validate(
     {
@@ -27,7 +30,9 @@ def activities(
     done: list[AppAction],
     log: list[str] | None = None,
     deploy: str = "kept",
+    first_build: str | None = "passed (attempt 1)",
 ):
+    """`first_build`: what the first_build activity answers; None = it never settles (fails for good)."""
     log = [] if log is None else log
 
     @activity.defn(name="read_requests")
@@ -58,6 +63,13 @@ def activities(
     async def ensure_deploy_files(app: str, owner: str, public_key: str) -> str:
         log.append(f"ensure_deploy_files {app} {owner}")
         return deploy
+
+    @activity.defn(name="first_build")
+    async def first_build_step(app: str) -> str:
+        log.append(f"first_build {app}")
+        if first_build is None:
+            raise ApplicationError("first build in_progress (attempt 1)", non_retryable=True)
+        return first_build
 
     @activity.defn(name="lock_out")
     async def lock_out(app: str) -> str:
@@ -110,6 +122,7 @@ def activities(
         ensure_repo,
         ensure_trust,
         ensure_deploy_files,
+        first_build_step,
         lock_out,
         dry_run,
         ensure_build_keys,
@@ -130,16 +143,20 @@ async def run_sync(
     existing: dict[str, ExistingApp],
     log: list[str] | None = None,
     deploy: str = "kept",
+    first_build: str | None = "passed (attempt 1)",
 ):
     done: list[AppAction] = []
     queue = f"test-{uuid.uuid4()}"
     async with Worker(
         client,
         task_queue=queue,
-        workflows=[RequestsSync, AppWorkflow, OnboardBuild],
-        activities=activities(snapshot, existing, done, log, deploy),
+        workflows=[RequestsSync, AppWorkflow, OnboardBuild, FirstBuild],
+        activities=activities(snapshot, existing, done, log, deploy, first_build),
     ):
         result = await client.execute_workflow(RequestsSync.run, id=f"sync-{uuid.uuid4()}", task_queue=queue)
+        for app in snapshot.apps:  # the first-build watch outlives the sync (D90): let it finish too
+            with suppress(RPCError):  # never started
+                await client.get_workflow_handle(f"first-build-{app}").result()
     return result, done
 
 
@@ -182,7 +199,7 @@ async def test_build_credentials_follow_the_repo_in_order(env: WorkflowEnvironme
     gone = ExistingApp(key="old", status="active", template="nuwa/python")
     log: list[str] = []
     await run_sync(env.client, snapshot, {"old": gone}, log)
-    steps = [line for line in log if line.split()[0].startswith(("ensure_", "lock_out"))]
+    steps = [line for line in log if line.split()[0].startswith(("ensure_", "first_build", "lock_out"))]
     assert steps == [
         "ensure_repo echo nuwa/python",
         "ensure_build_keys echo",
@@ -190,6 +207,7 @@ async def test_build_credentials_follow_the_repo_in_order(env: WorkflowEnvironme
         "ensure_runner_registration echo",
         "ensure_trust echo",
         "ensure_deploy_files echo mario",
+        "first_build echo",
         "lock_out echo",
     ]  # nothing for "old": retiring builds nothing
 
@@ -205,6 +223,15 @@ async def test_shikigami_locks_itself_out_only_once_the_marker_is_in(
     log: list[str] = []
     await run_sync(env.client, snapshot, {}, log, deploy)
     assert ("lock_out echo" in log) == locks_out
+
+
+async def test_a_first_build_that_never_settles_still_ends_in_the_lock_out(env: WorkflowEnvironment):
+    snapshot = RequestsSnapshot(commit="c1", apps={"echo": ECHO}, databases={}, problems=[])
+    log: list[str] = []
+    await run_sync(env.client, snapshot, {}, log, "written, first build started", first_build=None)
+    assert log[-2:] == ["first_build echo", "lock_out echo"]  # a broken build doesn't keep Shikigami admin
+    result = await env.client.get_workflow_handle("first-build-echo").result()
+    assert result == "first build not settled within an hour; lock-out kept"
 
 
 def test_fingerprint_shows_the_end_of_the_key():
