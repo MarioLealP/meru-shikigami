@@ -1,7 +1,8 @@
 # Shikigami's CI on Meru's runner (Sindri, namespace shikigami-build: each job is its own pod).
 # checks: everything scripts/check.sh runs locally - lint, format, types, lockfile, pip-audit, tests (incl. the workflows in
 # Temporal's test server), generated schema. No credentials in this pod.
-# build: after the checks. Pull requests: build only. Main: fetch Shikigami's Zot login + signing key from OpenBao
+# build: after the checks, through scripts/build.sh (waits for memory, gives buildkitd time to start).
+# Pull requests: build only. Main: fetch Shikigami's Zot login + signing key from OpenBao
 # (into memory), build, push to Zot, sign, then write the new digest into deploy/values.yaml - Argo CD rolls that
 # out. The deploy commit itself doesn't trigger a run (paths-ignore); rebuild main by hand with "Run workflow"
 # (workflow_dispatch).
@@ -54,7 +55,7 @@ jobs:
 
       - name: build
         if: gitea.ref != 'refs/heads/main'
-        run: buildctl-daemonless.sh build --frontend dockerfile.v0 --local context=. --local dockerfile=.
+        run: scripts/build.sh build --frontend dockerfile.v0 --local context=. --local dockerfile=.
 
       - name: fetch keys
         if: gitea.ref == 'refs/heads/main'
@@ -81,7 +82,7 @@ jobs:
       - name: build and push
         if: gitea.ref == 'refs/heads/main'
         run: |
-          buildctl-daemonless.sh build --frontend dockerfile.v0 --local context=. --local dockerfile=. \
+          scripts/build.sh build --frontend dockerfile.v0 --local context=. --local dockerfile=. \
             --output "type=image,name=$IMAGE:$TAG,push=true,registry.insecure=true" --metadata-file /tmp/build.json
           digest=$(sed -n 's/.*"containerimage.digest": *"\(sha256:[0-9a-f]*\)".*/\1/p' /tmp/build.json)
           test -n "$digest"
