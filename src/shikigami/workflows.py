@@ -6,7 +6,8 @@ from datetime import timedelta
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
-from temporalio.exceptions import WorkflowAlreadyStartedError
+from temporalio.exceptions import ActivityError, WorkflowAlreadyStartedError
+from temporalio.workflow import ParentClosePolicy
 
 with workflow.unsafe.imports_passed_through():
     from shikigami.activities import Activities, BuildActivities
@@ -18,6 +19,8 @@ TIMEOUT = timedelta(minutes=2)  # per attempt
 RETRY = RetryPolicy(maximum_attempts=5)  # then the run fails and the next ping or night tries again
 # Argo applies a commit within ~3 min (poll 120 s + 60 s jitter); look every 30 s for 15 min, then the run fails
 WAIT_STOPPED = RetryPolicy(initial_interval=timedelta(seconds=30), backoff_coefficient=1.0, maximum_attempts=30)
+# A first build can wait up to 40 min for memory (scripts/build.sh) and then takes a few: look every minute for an hour
+FIRST_BUILD_POLL = RetryPolicy(initial_interval=timedelta(minutes=1), backoff_coefficient=1.0, maximum_attempts=60)
 
 
 def fingerprint(public_key: str) -> str:
@@ -64,16 +67,23 @@ class AppWorkflow:
                 )
                 workflow.logger.info("app %s: deploy files %s", action.app, deploy)
                 if deploy == "kept" or deploy.startswith("written"):  # marker in: the repo is the app's now (D89)
-                    locked = await workflow.execute_activity_method(
-                        Activities.lock_out, action.app, start_to_close_timeout=TIMEOUT, retry_policy=RETRY
-                    )
-                    workflow.logger.info("app %s: lock-out %s", action.app, locked)
+                    await self._first_build_then_lock_out(action.app)
         if action.kind == "retire" and action.template:  # removed by its request (D83); no request at all: dry run
             await self._retire(action.app)
             return
         await workflow.execute_activity_method(
             Activities.dry_run, action, start_to_close_timeout=TIMEOUT, retry_policy=RETRY
         )
+
+    async def _first_build_then_lock_out(self, app: str) -> None:
+        """Its own workflow, not awaited (D90): the wait can take an hour, and requests-sync waits for every app.
+        One id per app, so a later pass that finds it still watching leaves it be - and doesn't lock out early."""
+        try:
+            await workflow.start_child_workflow(
+                FirstBuild.run, app, id=f"first-build-{app}", parent_close_policy=ParentClosePolicy.ABANDON
+            )
+        except WorkflowAlreadyStartedError:
+            workflow.logger.info("app %s: first build still watched - lock-out follows it", app)
 
     async def _retire(self, app: str) -> None:
         """D85, in order: the stop must be applied before the Application goes - preserveResourcesOnDeletion would
@@ -112,6 +122,27 @@ class OnboardBuild:
             BuildActivities.ensure_runner_registration, app, start_to_close_timeout=TIMEOUT, retry_policy=RETRY
         )
         return public_key
+
+
+@workflow.defn
+class FirstBuild:
+    """D90: wait for the app's first build (re-running a failed one, up to first_build_reruns times), then lock out
+    (D89) whatever came of it - a build that never passes doesn't keep Shikigami admin. One hour at most."""
+
+    @workflow.run
+    async def run(self, app: str) -> str:
+        try:
+            build = await workflow.execute_activity_method(
+                Activities.first_build, app, start_to_close_timeout=TIMEOUT, retry_policy=FIRST_BUILD_POLL
+            )
+        except ActivityError:
+            build = "not settled within an hour"
+        workflow.logger.info("app %s: first build %s", app, build)
+        locked = await workflow.execute_activity_method(
+            Activities.lock_out, app, start_to_close_timeout=TIMEOUT, retry_policy=RETRY
+        )
+        workflow.logger.info("app %s: lock-out %s", app, locked)
+        return f"first build {build}; lock-out {locked}"
 
 
 @workflow.defn

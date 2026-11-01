@@ -498,3 +498,67 @@ async def test_lock_out_is_kept_once_shikigami_is_not_admin():
     activities, writes = locking(admin=False, users={"xolotl"})
     assert await ActivityEnvironment().run(activities.lock_out, "echo") == "kept"
     assert writes == []
+
+
+def first_build_gitea(admin: bool, run: dict | None) -> tuple[Activities, list[str]]:
+    """Activities over a fake Gitea: Meru/echo (Shikigami admin or not) and its newest hand-started CI run."""
+    calls: list[str] = []
+
+    def gitea(request: httpx2.Request) -> httpx2.Response:
+        path = request.url.path.removeprefix("/api/v1/repos/Meru/echo")
+        calls.append(f"{request.method} {path}")
+        if path == "":
+            return httpx2.Response(200, json={"permissions": {"admin": admin}})
+        if path == "/actions/runs":
+            assert request.url.params["event"] == "workflow_dispatch"
+            return httpx2.Response(
+                200, json={"total_count": int(run is not None), "workflow_runs": [run] if run else []}
+            )
+        if path.endswith("/rerun-failed-jobs"):
+            return httpx2.Response(201, json={})
+        return httpx2.Response(500)
+
+    http = httpx2.AsyncClient(transport=httpx2.MockTransport(gitea))
+    tokens = TokenSource(http, "https://auth.test/token/", "thoth", "shikigami", SecretStr("pw"))
+    settings = Settings.model_construct(
+        gitea_url="https://git.test", gitea_token=SecretStr("tok"), apps_org="Meru", first_build_reruns=2
+    )
+    return Activities(settings, http, tokens), calls
+
+
+def ci_run(status: str, conclusion: str | None = None, attempt: int = 1) -> dict:
+    return {"id": 1954, "status": status, "conclusion": conclusion, "run_attempt": attempt, "path": "ci.yaml@main"}
+
+
+async def test_a_passed_first_build_is_done():
+    activities, calls = first_build_gitea(True, ci_run("completed", "success", attempt=2))
+    assert await ActivityEnvironment().run(activities.first_build, "echo") == "passed (attempt 2)"
+    assert not any(c.startswith("POST") for c in calls)
+
+
+async def test_a_running_first_build_is_asked_again_later():
+    activities, calls = first_build_gitea(True, ci_run("in_progress"))
+    with pytest.raises(ApplicationError, match="in_progress"):
+        await ActivityEnvironment().run(activities.first_build, "echo")
+    assert not any(c.startswith("POST") for c in calls)
+
+
+async def test_a_failed_first_build_has_its_failed_jobs_rerun():
+    activities, calls = first_build_gitea(True, ci_run("completed", "failure", attempt=2))
+    with pytest.raises(ApplicationError, match="re-run"):  # then asked again a minute later
+        await ActivityEnvironment().run(activities.first_build, "echo")
+    assert calls[-1] == "POST /actions/runs/1954/rerun-failed-jobs"
+
+
+async def test_after_the_last_rerun_a_failure_is_left_to_the_owner():
+    activities, calls = first_build_gitea(True, ci_run("completed", "failure", attempt=3))
+    result = await ActivityEnvironment().run(activities.first_build, "echo")
+    assert result == "failure after 3 attempts - left to the owner"
+    assert not any(c.startswith("POST") for c in calls)
+
+
+async def test_a_repo_shikigami_left_is_not_watched():
+    activities, calls = first_build_gitea(False, None)
+    result = await ActivityEnvironment().run(activities.first_build, "echo")
+    assert result == "not watched (Shikigami already left the repo)"
+    assert calls == ["GET "]  # only the admin check: no runs read, nothing re-run
