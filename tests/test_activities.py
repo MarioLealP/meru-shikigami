@@ -80,6 +80,9 @@ def gitea(files: dict[str, str], public: dict[str, str], commits: list[dict], hi
             return httpx2.Response(204)
         if path == "/api/v1/repos/Meru/echo/pulls":
             return httpx2.Response(200, json=[])
+        if str(request.url) == "http://xolotl.test/ping":
+            commits.append({"ping": True})
+            return httpx2.Response(202, json={})
         if path.startswith("/api/v1/repos/Meru/echo/contents/"):
             assert request.headers["authorization"] == "token tok"
             if hidden:  # a repo the restricted bot wasn't added to
@@ -103,6 +106,7 @@ def gitea(files: dict[str, str], public: dict[str, str], commits: list[dict], hi
         gitea_user="shikigami",
         apps_org="Meru",
         merger_user="xolotl",
+        merger_ping_url="http://xolotl.test/ping",
     )
     return Activities(settings, http, tokens)
 
@@ -131,8 +135,9 @@ TEMPLATE = {"deploy/meru.yaml.in": TEMPLATE_IN, "deploy/values.yaml": VALUES}
 
 
 async def test_the_marker_is_a_pr_xolotl_can_merge_once_everything_is_ready():
-    result, [writer, opened] = await deploy(TEMPLATE, READY)
+    result, [writer, opened, ping] = await deploy(TEMPLATE, READY)
     assert result == "proposed in Meru/echo"
+    assert ping == {"ping": True}  # Xolotl sweeps now, not at its backstop
     assert writer == {"writer": {"permission": "write"}}  # Xolotl merges it, so Write before the PR (D99)
     pr = opened["pr"]
     assert (pr["remote"], pr["topic"], pr["title"]) == (
@@ -148,7 +153,7 @@ async def test_the_marker_is_a_pr_xolotl_can_merge_once_everything_is_ready():
 
 
 async def test_the_requests_secrets_are_wired_into_values():
-    _, [_, opened] = await deploy(TEMPLATE, READY, secrets=["discord-token", "api-key"])
+    _, [_, opened, _] = await deploy(TEMPLATE, READY, secrets=["discord-token", "api-key"])
     assert opened["pr"]["files"]["deploy/values.yaml"] == (
         "name: echo\nowner: mario\n\n" + marker.SECRETS_COMMENT + "\n"
         "externalSecrets:\n  env: {}\n"

@@ -453,7 +453,7 @@ class Activities:
         # Xolotl merges it: Write now, not only at the lock-out (D89) - Shikigami is still admin here.
         if not await add_writer(self._http, s.gitea_url, token, org, app, s.merger_user):
             return f"waiting: no {s.merger_user} user to merge the marker PR"
-        return await self._open_once(
+        opened = await self._open_once(
             app,
             marker.TITLE.format(app=app),
             [marker.TITLE.format(app=app)],
@@ -465,6 +465,7 @@ class Activities:
             ),
             files,
         )
+        return await self._ping_merger(opened)  # Xolotl sweeps now, not at its 15-minute backstop
 
     @activity.defn
     async def first_build(self, app: str) -> str:
