@@ -12,7 +12,6 @@ from shikigami.web import make_app
 
 @pytest.fixture
 def web(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("SHIKIGAMI_AUTHENTIK_PASSWORD", "x")
     monkeypatch.setenv("SHIKIGAMI_GITEA_TOKEN", "tok")
     http = gitea({"apps/echo.yaml": ECHO}, [])
     return TestClient(make_app(Settings(), cast(Client, None), http))  # /validate never touches Temporal
@@ -40,7 +39,6 @@ def test_validate_refuses_oversized_content(web: TestClient):
 
 
 def test_validate_says_502_when_gitea_fails(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("SHIKIGAMI_AUTHENTIK_PASSWORD", "x")
     monkeypatch.setenv("SHIKIGAMI_GITEA_TOKEN", "tok")
     down = httpx2.AsyncClient(transport=httpx2.MockTransport(lambda r: httpx2.Response(500)))
     web = TestClient(make_app(Settings(), cast(Client, None), down))

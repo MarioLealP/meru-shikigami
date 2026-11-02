@@ -14,7 +14,6 @@ def test_kubernetes_service_links_are_ignored(monkeypatch: pytest.MonkeyPatch):
         "SHIKIGAMI_SERVICE_HOST": "10.43.23.251",
         "SHIKIGAMI_SERVICE_PORT": "80",
         "SHIKIGAMI_SERVICE_PORT_HTTP": "80",
-        "SHIKIGAMI_AUTHENTIK_PASSWORD": "x",
         "SHIKIGAMI_GITEA_TOKEN": "x",
     }
     for name, value in links.items():

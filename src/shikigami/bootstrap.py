@@ -39,13 +39,7 @@ async def run(app: str) -> str:
     settings, boot = Settings(), BootstrapSettings()
     tls = ssl.create_default_context(cafile=boot.openbao_ca)
     async with httpx2.AsyncClient(timeout=30) as http, httpx2.AsyncClient(timeout=30, verify=tls) as bao:
-        tokens = TokenSource(
-            http,
-            settings.token_url,
-            settings.temporal_client_id,
-            settings.authentik_username,
-            settings.authentik_password,
-        )
+        tokens = TokenSource(http, settings.token_url, settings.temporal_client_id, settings.authentik_token_file)
         client = await connect(settings, tokens)
 
         async def admin_token() -> str:  # the admin session's, fixed for the run
