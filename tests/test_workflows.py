@@ -62,7 +62,7 @@ def activities(
         done.append(action)
 
     @activity.defn(name="ensure_deploy_files")
-    async def ensure_deploy_files(app: str, owner: str, public_key: str) -> str:
+    async def ensure_deploy_files(app: str, owner: str, public_key: str, secrets: list[str]) -> str:
         log.append(f"ensure_deploy_files {app} {owner}")
         return deploy
 
@@ -219,7 +219,12 @@ async def test_build_credentials_follow_the_repo_in_order(env: WorkflowEnvironme
 
 @pytest.mark.parametrize(
     ("deploy", "locks_out"),
-    [("written, first build started", True), ("kept", True), ("waiting: no fence Meru/meru projects/echo.yaml", False)],
+    [
+        ("kept", True),
+        ("proposed in Meru/echo", False),  # the marker PR waits for Xolotl (D99)
+        ("waiting on Meru/echo#1", False),
+        ("waiting: no fence Meru/meru projects/echo.yaml", False),
+    ],
 )
 async def test_shikigami_locks_itself_out_only_once_the_marker_is_in(
     env: WorkflowEnvironment, deploy: str, locks_out: bool
@@ -233,7 +238,7 @@ async def test_shikigami_locks_itself_out_only_once_the_marker_is_in(
 async def test_a_first_build_that_never_settles_still_ends_in_the_lock_out(env: WorkflowEnvironment):
     snapshot = RequestsSnapshot(commit="c1", apps={"echo": ECHO}, databases={}, problems=[])
     log: list[str] = []
-    await run_sync(env.client, snapshot, {}, log, "written, first build started", first_build=None)
+    await run_sync(env.client, snapshot, {}, log, "kept", first_build=None)
     assert log[-2:] == ["first_build echo", "lock_out echo"]  # a broken build doesn't keep Shikigami admin
     result = await env.client.get_workflow_handle("first-build-echo").result()
     assert result == "first build not settled within an hour; lock-out kept"

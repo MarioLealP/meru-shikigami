@@ -9,6 +9,15 @@ import yaml
 EMPTY_OWNER = re.compile(r'^owner: ""(?:[ \t]*#[^\n]*)?$', re.MULTILINE)
 
 
+# The shared contract with Xolotl (xolotl/expected.py rebuilds the marker PR, D99): byte for byte.
+SECRETS_COMMENT = (
+    "# Secrets from the request (D99): Janus wrote the values to OpenBao apps/meru/<app>/eso/env when the app was"
+    " requested."
+)
+TITLE = "chore(deploy): {app} is a Meru app"  # Xolotl reads it back to know what to rebuild
+SET_KEYS = re.compile(r"^(externalSecrets|secretEnv):", re.MULTILINE)
+
+
 class BadTemplate(Exception):
     """The template's file doesn't have the line Shikigami fills in."""
 
@@ -34,3 +43,23 @@ def key_trusted(signing_keys: str, app: str, public_key: str) -> bool:
     data = (yaml.safe_load(signing_keys) or {}).get("data") or {}
     listed = data.get(app)
     return isinstance(listed, str) and bool(_body(public_key)) and _body(listed) == _body(public_key)
+
+
+def env_name(secret: str) -> str:
+    """`discord-token` -> DISCORD_TOKEN: request names are lowercase letters, digits and dashes, starting with a letter,
+    so every one is a valid environment variable name and no two collide."""
+    return secret.upper().replace("-", "_")
+
+
+def with_secrets(text: str, secrets: list[str], path: str) -> str:
+    """deploy/values.yaml with the request's secrets wired (D99): one ExternalSecret `env` (ESO fills it from the
+    app's own OpenBao path) and one env var per name. Appended at the end; a template that already sets either key is
+    refused - its owner's wiring isn't Shikigami's to merge."""
+    if not secrets:
+        return text
+    if SET_KEYS.search(text):
+        raise BadTemplate(f"{path}: already sets externalSecrets or secretEnv - not wiring the request's secrets in")
+    lines = ["", SECRETS_COMMENT, "externalSecrets:", "  env: {}", "secretEnv:"]
+    for name in secrets:
+        lines += [f"  {env_name(name)}:", "    secret: env", f"    key: {name}"]
+    return (text if text.endswith("\n") else text + "\n") + "\n".join(lines) + "\n"

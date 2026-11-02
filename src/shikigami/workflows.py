@@ -61,12 +61,12 @@ class AppWorkflow:
             if action.owner:
                 deploy = await workflow.execute_activity_method(
                     Activities.ensure_deploy_files,
-                    args=[action.app, action.owner, public_key],
+                    args=[action.app, action.owner, public_key, action.secrets],
                     start_to_close_timeout=TIMEOUT,
                     retry_policy=RETRY,
                 )
                 workflow.logger.info("app %s: deploy files %s", action.app, deploy)
-                if deploy == "kept" or deploy.startswith("written"):  # marker in: the repo is the app's now (D89)
+                if deploy == "kept":  # marker in (Xolotl merged it, D99): the repo is the app's now (D89)
                     await self._first_build_then_lock_out(action.app)
         if action.kind == "retire" and action.template:  # removed by its request (D83); no request at all: dry run
             await self._retire(action.app)
