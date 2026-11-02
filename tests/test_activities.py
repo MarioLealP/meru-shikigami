@@ -8,7 +8,7 @@ from pydantic import SecretStr
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
-from shikigami import trust
+from shikigami import marker, trust
 from shikigami.activities import Activities
 from shikigami.config import Settings
 from shikigami.models import RequestsSnapshot
@@ -73,6 +73,13 @@ def gitea(files: dict[str, str], public: dict[str, str], commits: list[dict], hi
         if request.method == "POST" and path == "/api/v1/repos/Meru/echo/actions/workflows/ci.yaml/dispatches":
             commits.append({"dispatch": json.loads(request.content)})
             return httpx2.Response(204)
+        if path == "/api/v1/users/xolotl":
+            return httpx2.Response(200, json={"login": "xolotl"})
+        if request.method == "PUT" and path == "/api/v1/repos/Meru/echo/collaborators/xolotl":
+            commits.append({"writer": json.loads(request.content)})
+            return httpx2.Response(204)
+        if path == "/api/v1/repos/Meru/echo/pulls":
+            return httpx2.Response(200, json=[])
         if path.startswith("/api/v1/repos/Meru/echo/contents/"):
             assert request.headers["authorization"] == "token tok"
             if hidden:  # a repo the restricted bot wasn't added to
@@ -90,35 +97,72 @@ def gitea(files: dict[str, str], public: dict[str, str], commits: list[dict], hi
 
     http = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
     tokens = TokenSource(http, "https://auth.test/token/", "thoth", "shikigami", SecretStr("pw"))
-    settings = Settings.model_construct(gitea_url="https://git.test", gitea_token=SecretStr("tok"), apps_org="Meru")
+    settings = Settings.model_construct(
+        gitea_url="https://git.test",
+        gitea_token=SecretStr("tok"),
+        gitea_user="shikigami",
+        apps_org="Meru",
+        merger_user="xolotl",
+    )
     return Activities(settings, http, tokens)
 
 
 READY = {"meru/raw/projects/echo.yaml": "kind: AppProject\n", "kyverno/raw/keys/meru-signing-keys.yaml": SIGNING_KEYS}
 
 
-async def deploy(files: dict[str, str], public: dict[str, str], hidden: bool = False) -> tuple[str, list[dict]]:
-    commits: list[dict] = []
-    result = await ActivityEnvironment().run(
-        gitea(files, public, commits, hidden).ensure_deploy_files, "echo", "mario", PUBLIC_KEY
+async def deploy(
+    files: dict[str, str], public: dict[str, str], hidden: bool = False, secrets: list[str] | None = None
+) -> tuple[str, list[dict]]:
+    """ensure_deploy_files over the fake Gitea; the AGit PR it opens is recorded among the calls."""
+    calls: list[dict] = []
+
+    async def fake_open_pr(remote, user, token, topic, title, description, files):
+        calls.append({"pr": {"remote": remote, "topic": topic, "title": title, "files": files}})
+
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr("shikigami.activities.open_pr", fake_open_pr)
+        result = await ActivityEnvironment().run(
+            gitea(files, public, calls, hidden).ensure_deploy_files, "echo", "mario", PUBLIC_KEY, secrets
+        )
+    return result, calls
+
+
+TEMPLATE = {"deploy/meru.yaml.in": TEMPLATE_IN, "deploy/values.yaml": VALUES}
+
+
+async def test_the_marker_is_a_pr_xolotl_can_merge_once_everything_is_ready():
+    result, [writer, opened] = await deploy(TEMPLATE, READY)
+    assert result == "proposed in Meru/echo"
+    assert writer == {"writer": {"permission": "write"}}  # Xolotl merges it, so Write before the PR (D99)
+    pr = opened["pr"]
+    assert (pr["remote"], pr["topic"], pr["title"]) == (
+        "https://git.test/Meru/echo.git",
+        "deploy-echo",
+        "chore(deploy): echo is a Meru app",
     )
-    return result, commits
+    assert pr["files"] == {
+        "deploy/meru.yaml": "owner: mario\nchart: nuwa-app-0.7.0\nbuild: true\n",
+        "deploy/meru.yaml.in": None,
+        "deploy/values.yaml": "name: echo\nowner: mario\n",
+    }  # nothing straight to main, and no build asked for yet: that waits for the merge (first_build)
 
 
-async def test_writes_the_marker_in_one_commit_once_everything_is_ready():
-    result, [commit, dispatch] = await deploy({"deploy/meru.yaml.in": TEMPLATE_IN, "deploy/values.yaml": VALUES}, READY)
-    assert result == "written, first build started"
-    assert dispatch == {"dispatch": {"ref": "main"}}  # after the commit: CI skips deploy/**-only pushes
-    ops = {f["path"]: f for f in commit["files"]}
-    assert ops["deploy/meru.yaml"]["operation"] == "create"
-    assert base64.b64decode(ops["deploy/meru.yaml"]["content"]).decode().startswith("owner: mario\n")
-    assert ops["deploy/meru.yaml.in"] == {
-        "operation": "delete",
-        "path": "deploy/meru.yaml.in",
-        "sha": "sha-deploy/meru.yaml.in",
-    }
-    assert ops["deploy/values.yaml"]["sha"] == "sha-deploy/values.yaml"
-    assert base64.b64decode(ops["deploy/values.yaml"]["content"]).decode() == "name: echo\nowner: mario\n"
+async def test_the_requests_secrets_are_wired_into_values():
+    _, [_, opened] = await deploy(TEMPLATE, READY, secrets=["discord-token", "api-key"])
+    assert opened["pr"]["files"]["deploy/values.yaml"] == (
+        "name: echo\nowner: mario\n\n" + marker.SECRETS_COMMENT + "\n"
+        "externalSecrets:\n  env: {}\n"
+        "secretEnv:\n"
+        "  DISCORD_TOKEN:\n    secret: env\n    key: discord-token\n"
+        "  API_KEY:\n    secret: env\n    key: api-key\n"
+    )
+
+
+async def test_a_template_that_already_wires_secrets_is_not_retried():
+    files = {**TEMPLATE, "deploy/values.yaml": VALUES + "secretEnv: {}\n"}
+    with pytest.raises(ApplicationError) as raised:
+        await deploy(files, READY, secrets=["api-key"])
+    assert raised.value.non_retryable and "secretEnv" in str(raised.value)
 
 
 async def test_an_existing_marker_is_never_touched():
@@ -564,6 +608,8 @@ def first_build_gitea(admin: bool, run: dict | None) -> tuple[Activities, list[s
             )
         if path.endswith("/rerun-failed-jobs"):
             return httpx2.Response(201, json={})
+        if path == "/actions/workflows/ci.yaml/dispatches":
+            return httpx2.Response(204)
         return httpx2.Response(500)
 
     http = httpx2.AsyncClient(transport=httpx2.MockTransport(gitea))
@@ -610,3 +656,11 @@ async def test_a_repo_shikigami_left_is_not_watched():
     result = await ActivityEnvironment().run(activities.first_build, "echo")
     assert result == "not watched (Shikigami already left the repo)"
     assert calls == ["GET "]  # only the admin check: no runs read, nothing re-run
+
+
+async def test_with_no_build_yet_the_first_one_is_started_and_watched():
+    # D99: the marker is a PR now, so the first build is asked for here, once the marker is on main
+    activities, calls = first_build_gitea(True, None)
+    with pytest.raises(ApplicationError, match="first build started"):
+        await ActivityEnvironment().run(activities.first_build, "echo")
+    assert "POST /actions/workflows/ci.yaml/dispatches" in calls

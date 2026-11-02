@@ -67,6 +67,14 @@ PARK = """Shikigami's retirement of `{app}` (D85, cm-konk): the marker goes back
 Opened only after Argo applied the stop. Xolotl merges it once it matches the rebuild from main."""
 
 
+DEPLOY_PR = """Shikigami's onboarding of `{app}` (D81, D99): the marker that makes Meru deploy this repo -
+`deploy/meru.yaml`, from the template's `deploy/meru.yaml.in` with the owner `{owner}` - and in `deploy/values.yaml`
+the owner and the request's secrets as env vars ({secrets}), read by ESO from the app's own OpenBao path.
+
+Opened once the app's fence and signing key are in place. Xolotl merges it once every file matches what it rebuilds
+from main and the approved request; the first build starts after that."""
+
+
 def trust_title(direction: str, app: str, what: str) -> str:
     """A trust PR's title, in the repos' Conventional Commits form - Xolotl reads it back to know what to rebuild."""
     return f"chore(trust): {direction} {app} - {what}"
@@ -403,12 +411,13 @@ class Activities:
         return await archive(self._http, s.gitea_url, token, s.apps_org, app)
 
     @activity.defn
-    async def ensure_deploy_files(self, app: str, owner: str, public_key: str) -> str:
+    async def ensure_deploy_files(self, app: str, owner: str, public_key: str, secrets: list[str] | None = None) -> str:
         """deploy/meru.yaml - the marker that makes Meru deploy the repo (D81) - from the template's
-        deploy/meru.yaml.in with the request's owner, pushed straight to main in one commit with the owner in
-        deploy/values.yaml. Only while the marker is missing: once it exists the repo is the app's, never touched again.
-        Waits (says why, next sync tries again) until the app's fence and its signing key are in place - a marker
-        before them would deploy into nothing."""
+        deploy/meru.yaml.in with the request's owner, plus the owner and the request's secrets wired into
+        deploy/values.yaml (D99), as one PR Xolotl rebuilds and merges (D99: no Shikigami write reaches a main
+        unchecked). "kept" once the marker is on main: the repo is the app's then, never touched again. Waits (says
+        why, the next sync tries again) until the app's fence and signing key are in place - a marker before them
+        would deploy into nothing - and while the PR is open."""
         s = self._settings
         token, org = s.gitea_token.get_secret_value(), s.apps_org
         # Read like Argo reads it (Meru/meru deploys public repos only), not with the bot's token: the restricted bot
@@ -425,41 +434,56 @@ class Activities:
             return "waiting: no deploy/meru.yaml.in (repo generated before the template had it)"
         values = await read_file(self._http, s.gitea_url, token, org, app, "deploy/values.yaml")
         try:
-            files = [
-                change("create", "deploy/meru.yaml", marker.with_owner(template[0], owner, "deploy/meru.yaml.in")),
-                change("delete", "deploy/meru.yaml.in", sha=template[1]),
-            ]
-            if values and marker.owner_unset(values[0]):
-                filled = marker.with_owner(values[0], owner, "deploy/values.yaml")
-                files.append(change("update", "deploy/values.yaml", filled, sha=values[1]))
+            files: dict[str, str | None] = {
+                "deploy/meru.yaml": marker.with_owner(template[0], owner, "deploy/meru.yaml.in"),
+                "deploy/meru.yaml.in": None,
+            }
+            if values is None:
+                if secrets:
+                    raise marker.BadTemplate("no deploy/values.yaml to wire the request's secrets into")
+            else:
+                text = values[0]
+                if marker.owner_unset(text):
+                    text = marker.with_owner(text, owner, "deploy/values.yaml")
+                text = marker.with_secrets(text, secrets or [], "deploy/values.yaml")
+                if text != values[0]:
+                    files["deploy/values.yaml"] = text
         except marker.BadTemplate as e:
             raise ApplicationError(str(e), non_retryable=True) from e
-        message = (
-            f"chore(deploy): {app} is a Meru app (owner {owner})\n\n"
-            "Written by Shikigami (D81): fence, signing key and build credentials are in place."
+        # Xolotl merges it: Write now, not only at the lock-out (D89) - Shikigami is still admin here.
+        if not await add_writer(self._http, s.gitea_url, token, org, app, s.merger_user):
+            return f"waiting: no {s.merger_user} user to merge the marker PR"
+        return await self._open_once(
+            app,
+            marker.TITLE.format(app=app),
+            [marker.TITLE.format(app=app)],
+            f"deploy-{app}",
+            DEPLOY_PR.format(
+                app=app,
+                owner=owner,
+                secrets=", ".join(f"`{marker.env_name(n)}`" for n in secrets or []) or "none",
+            ),
+            files,
         )
-        await commit_files(self._http, s.gitea_url, token, org, app, message, files)
-        activity.logger.info("%s: deploy/meru.yaml written", app)
-        # The first build: CI ignores deploy/**-only pushes, so the marker commit starts nothing by itself. A retry
-        # after this point finds the marker and stops at "kept" - the build is asked for once; if this call fails,
-        # the app waits on its placeholder digest until someone presses "Run workflow" (the failure is in the history).
-        await run_workflow(self._http, s.gitea_url, token, org, app, "ci.yaml")
-        activity.logger.info("%s: first build started", app)
-        return "written, first build started"
 
     @activity.defn
     async def first_build(self, app: str) -> str:
         """D90: the app's first build, before Shikigami leaves the repo (after that nobody automated can re-run it).
-        Passed -> done. Failed -> its failed jobs re-run, up to first_build_reruns times (Gitea counts the attempts,
-        so nothing is remembered here). Still running, or just re-run -> an error, and the workflow's retry policy
-        asks again a minute later. Not admin any more -> nothing to wait for."""
+        None yet -> started (D99: here, once the marker PR is merged). Passed -> done. Failed -> its failed jobs
+        re-run, up to first_build_reruns times (Gitea counts the attempts, so nothing is remembered here). Still
+        running, just started or just re-run -> an error, and the workflow's retry policy asks again a minute later.
+        Not admin any more -> nothing to wait for."""
         s = self._settings
         token, org = s.gitea_token.get_secret_value(), s.apps_org
         if not await is_admin(self._http, s.gitea_url, token, org, app):
             return "not watched (Shikigami already left the repo)"
         run = await dispatched_run(self._http, s.gitea_url, token, org, app)
         if run is None:
-            return "none to wait for (no hand-started run on main)"
+            # Asked for here, not with the marker: the marker is a PR now (D99), merged whenever Xolotl gets to it.
+            # CI ignores deploy/**-only pushes, so the merge starts nothing by itself.
+            await run_workflow(self._http, s.gitea_url, token, org, app, "ci.yaml")
+            activity.logger.info("%s: first build started", app)
+            raise ApplicationError("first build started")
         attempt = f"attempt {run.run_attempt}"
         if run.status != "completed":
             raise ApplicationError(f"first build {run.status} ({attempt})")

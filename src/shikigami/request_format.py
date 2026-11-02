@@ -69,6 +69,14 @@ class Exception_(_Model):
     reason: Annotated[str, StringConstraints(min_length=10, max_length=300)]
 
 
+class Secret(_Model):
+    """One environment variable from OpenBao (D99): `discord-token` -> DISCORD_TOKEN. Only the name lives here; Janus
+    writes the value to OpenBao (apps/meru/<app>/eso/env) when the app is requested - typed in, or made by Janus."""
+
+    name: Name
+    generate: bool = Field(default=False, description="true: Janus makes the value (secrets.token_urlsafe(32)).")
+
+
 class AppSpec(_Model):
     owner: Owner
     description: Annotated[str, StringConstraints(min_length=3, max_length=120, pattern=r"^[^\n]*$")]
@@ -81,7 +89,7 @@ class AppSpec(_Model):
     size: Size = "small"
     route: Route = Route()
     storage: list[Volume] = []
-    secrets: list[Name] = Field(default=[], description="Names only; the values go to OpenBao, never here.")
+    secrets: list[Secret] = Field(default=[], description="Names only; the values go to OpenBao, never here (D99).")
     replicas: Annotated[int, Field(ge=1, le=3)] = 1
     port: Annotated[int, Field(ge=1024, le=65535)] = 8080
     heartbeat: Annotated[str, StringConstraints(pattern=r"^/\S*$")] = "/heartbeat"
@@ -90,6 +98,13 @@ class AppSpec(_Model):
     removed: bool = Field(
         default=False, description="true = retire (D83): stopped and revoked now, purged after the retention."
     )
+
+    @model_validator(mode="after")
+    def _secret_names_unique(self) -> Self:
+        names = [s.name for s in self.secrets]
+        if len(names) != len(set(names)):
+            raise ValueError("each secret name only once")
+        return self
 
     @model_validator(mode="after")
     def _image_only_for_upstream(self) -> Self:

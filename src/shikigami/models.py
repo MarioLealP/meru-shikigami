@@ -35,3 +35,4 @@ class AppAction(BaseModel):
     template: str | None = None  # requested apps only
     description: str | None = None
     owner: str | None = None
+    secrets: list[str] = []  # the request's secret names (D99), wired into deploy/values.yaml with the marker

@@ -27,6 +27,7 @@ def plan(apps: dict[str, App], existing: dict[str, ExistingApp]) -> list[AppActi
                 template=spec.template,
                 description=spec.description,
                 owner=spec.owner,
+                secrets=[secret.name for secret in spec.secrets],
             )
         )
     for name in sorted(set(existing) - set(apps)):
