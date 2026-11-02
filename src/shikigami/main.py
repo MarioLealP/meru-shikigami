@@ -30,8 +30,7 @@ async def run() -> None:
     ):
 
         def tokens(client_id: str) -> TokenSource:
-            password = settings.authentik_password
-            return TokenSource(http, settings.token_url, client_id, settings.authentik_username, password)
+            return TokenSource(http, settings.token_url, client_id, settings.authentik_token_file)
 
         temporal_tokens = tokens(settings.temporal_client_id)
         client = await connect(settings, temporal_tokens)

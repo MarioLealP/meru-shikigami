@@ -14,6 +14,8 @@ from shikigami.config import Settings
 from shikigami.models import RequestsSnapshot
 from shikigami.tokens import TokenSource
 
+TOKEN_FILE = Path(__file__).parent / "fixtures" / "k8s-token"  # what the kubelet mounts for Authentik
+
 
 def activities(status: int) -> Activities:
     def handler(request: httpx2.Request) -> httpx2.Response:
@@ -22,7 +24,7 @@ def activities(status: int) -> Activities:
         return httpx2.Response(status, json={"title": "Snapshot refused"})
 
     http = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
-    tokens = TokenSource(http, "https://auth.test/token/", "thoth", "shikigami", SecretStr("pw"))
+    tokens = TokenSource(http, "https://auth.test/token/", "thoth", TOKEN_FILE)
     return Activities(
         Settings.model_construct(thoth_url="http://thoth.test", gitea_token=SecretStr("tok")), http, tokens
     )
@@ -99,7 +101,7 @@ def gitea(files: dict[str, str], public: dict[str, str], commits: list[dict], hi
         return httpx2.Response(500)
 
     http = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
-    tokens = TokenSource(http, "https://auth.test/token/", "thoth", "shikigami", SecretStr("pw"))
+    tokens = TokenSource(http, "https://auth.test/token/", "thoth", TOKEN_FILE)
     settings = Settings.model_construct(
         gitea_url="https://git.test",
         gitea_token=SecretStr("tok"),
@@ -241,7 +243,7 @@ async def onboard_trust(
         return httpx2.Response(200, text=public[path]) if path in public else httpx2.Response(404)
 
     http = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
-    tokens = TokenSource(http, "https://auth.test/token/", "thoth", "shikigami", SecretStr("pw"))
+    tokens = TokenSource(http, "https://auth.test/token/", "thoth", TOKEN_FILE)
     settings = Settings.model_construct(
         gitea_url="https://git.test", gitea_token=SecretStr("tok"), gitea_user="shikigami", apps_org="Meru"
     )
@@ -367,7 +369,7 @@ def retiring(
 
     http = httpx2.AsyncClient(transport=httpx2.MockTransport(gitea))
     kube = httpx2.AsyncClient(transport=httpx2.MockTransport(kubernetes))
-    tokens = TokenSource(http, "https://auth.test/token/", "thoth", "shikigami", SecretStr("pw"))
+    tokens = TokenSource(http, "https://auth.test/token/", "thoth", TOKEN_FILE)
     (kube_dir / "token").write_text("kube-token\n")  # the pod's API token (nuwa-app kubernetesApi)
     settings = Settings.model_construct(
         gitea_url="https://git.test",
@@ -561,7 +563,7 @@ def locking(admin: bool, users: set[str]) -> tuple[Activities, list[tuple[str, s
         return httpx2.Response(201 if request.method == "POST" else 204, json={})
 
     http = httpx2.AsyncClient(transport=httpx2.MockTransport(gitea))
-    tokens = TokenSource(http, "https://auth.test/token/", "thoth", "shikigami", SecretStr("pw"))
+    tokens = TokenSource(http, "https://auth.test/token/", "thoth", TOKEN_FILE)
     settings = Settings.model_construct(
         gitea_url="https://git.test",
         gitea_token=SecretStr("tok"),
@@ -618,7 +620,7 @@ def first_build_gitea(admin: bool, run: dict | None) -> tuple[Activities, list[s
         return httpx2.Response(500)
 
     http = httpx2.AsyncClient(transport=httpx2.MockTransport(gitea))
-    tokens = TokenSource(http, "https://auth.test/token/", "thoth", "shikigami", SecretStr("pw"))
+    tokens = TokenSource(http, "https://auth.test/token/", "thoth", TOKEN_FILE)
     settings = Settings.model_construct(
         gitea_url="https://git.test", gitea_token=SecretStr("tok"), apps_org="Meru", first_build_reruns=2
     )

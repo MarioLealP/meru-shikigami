@@ -12,18 +12,17 @@ port: 8080
 clusterIP: 10.43.0.60
 heartbeat:
   readyPath: /ready # Temporal answers over mTLS
-# Its two logins (D63), from OpenBao apps/meru/shikigami/eso/{authentik,gitea} through ESO (D66): Authentik's service
-# account for Temporal + Thoth tokens, Gitea's bot (Read on Meru/requests).
+# Its Gitea bot (Read on Meru/requests, D63), from OpenBao apps/meru/shikigami/eso/gitea through ESO (D66).
 secretEnv:
-  SHIKIGAMI_AUTHENTIK_PASSWORD:
-    secret: authentik
-    key: password
   SHIKIGAMI_GITEA_TOKEN:
     secret: gitea
     key: token
 externalSecrets:
-  authentik: {}
   gitea: {}
+# Its Authentik login for Temporal + Thoth tokens: its own Kubernetes token (D104) - the groups in the protected
+# blueprints (infra shikigami.yaml, thoth.yaml) list shikigami/shikigami. Nothing stored anywhere.
+authentikLogin:
+  enabled: true
 # Its client certificate for Temporal's front door (D70), mounted where the settings look (tls_dir).
 certificate:
   enabled: true
