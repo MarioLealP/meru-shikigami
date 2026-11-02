@@ -87,13 +87,21 @@ class AppWorkflow:
 
     async def _retire(self, app: str) -> None:
         """D85, in order: the stop must be applied before the Application goes - preserveResourcesOnDeletion would
-        leave running pods behind - and the trust goes once nothing uses it. The repo is archived last."""
+        leave running pods behind - and the trust goes once nothing uses it. The repo is archived last. Thoth hears
+        decommissioning at the start and retained once every step is done (only Anubis retires)."""
 
         async def step(method, retry_policy: RetryPolicy = RETRY):  # method: an activity method
             return await workflow.execute_activity_method(
                 method, app, start_to_close_timeout=TIMEOUT, retry_policy=retry_policy
             )
 
+        async def mark(status: str) -> None:
+            said = await workflow.execute_activity_method(
+                Activities.retire_mark, args=[app, status], start_to_close_timeout=TIMEOUT, retry_policy=RETRY
+            )
+            workflow.logger.info("app %s: retire - Thoth %s", app, said)
+
+        await mark("decommissioning")
         stop = await step(Activities.retire_stop)
         workflow.logger.info("app %s: retire - stop %s", app, stop)
         if not (stop.startswith("kept") or stop == "written"):  # a PR (cm-konk): Xolotl's merge pings the next pass
@@ -109,6 +117,7 @@ class AppWorkflow:
         workflow.logger.info("app %s: retire - Zot login %s", app, "revoked" if zot else "already gone")
         archived = await step(Activities.retire_archive)
         workflow.logger.info("app %s: retire - repo %s", app, "archived" if archived else "not archived here")
+        await mark("retained")
 
 
 @workflow.defn

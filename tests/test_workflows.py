@@ -118,8 +118,14 @@ def activities(
     }
     retire_steps = [retire_step(name, result) for name, result in answers.items()]
 
+    @activity.defn(name="retire_mark")
+    async def retire_mark(app: str, status: str) -> str:
+        log.append(f"retire_mark {app} {status}")
+        return status
+
     return [
         *retire_steps,
+        retire_mark,
         read_requests,
         read_existing_apps,
         declare_apps,
@@ -268,6 +274,7 @@ async def test_a_removed_request_retires_in_order_and_onboards_nothing(env: Work
     log: list[str] = []
     _, done = await run_sync(env.client, snapshot, {"golem": ExistingApp(key="golem", status="active")}, log)
     assert [line for line in log if line.startswith(("ensure_", "retire_", "revoke_"))] == [
+        "retire_mark golem decommissioning",  # Thoth hears it first (D85)
         "retire_stop golem",  # stop first ...
         "retire_wait_stopped golem",  # ... confirmed by Argo before the Application can go
         "retire_park_marker golem",
@@ -275,6 +282,7 @@ async def test_a_removed_request_retires_in_order_and_onboards_nothing(env: Work
         "retire_runner golem",
         "revoke_zot_login golem",
         "retire_archive golem",  # nothing is written to the repo after this
+        "retire_mark golem retained",  # every step done: stopped, revoked, data kept until Charon
     ]
     assert done == []  # no dry run: the pass is real
 
