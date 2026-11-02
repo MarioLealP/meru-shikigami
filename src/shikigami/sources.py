@@ -122,3 +122,20 @@ async def declare_apps(http: httpx2.AsyncClient, thoth_url: str, token: str, sna
     )
     response.raise_for_status()
     return response.json()
+
+
+async def mark_retire_step(http: httpx2.AsyncClient, thoth_url: str, token: str, app: str, status: str) -> str:
+    """Tell Thoth where an app's retirement stands (D85): decommissioning when the pass starts, retained when it's
+    done. Bookkeeping, never a gate: the stop and the revokes matter more than Thoth's status, so a refusal is said
+    and the pass goes on - the next pass (every sync) tries again. Network and server errors raise (retried)."""
+    response = await http.post(
+        f"{thoth_url}/v1/retire-steps",
+        json={"app": app, "status": status, "reason": "Shikigami's retire pass (D85)"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    if response.status_code == 200:
+        return status
+    if response.status_code in (403, 404, 409):  # no thoth.retire yet / not in Thoth / already further along
+        return f"not marked {status}: Thoth answered {response.status_code} {response.text[:200]}"
+    response.raise_for_status()
+    return f"not marked {status}: Thoth answered {response.status_code}"

@@ -33,7 +33,7 @@ from shikigami.repos import (
     rerun_failed,
     run_workflow,
 )
-from shikigami.sources import declare_apps, read_existing_apps, read_requests
+from shikigami.sources import declare_apps, mark_retire_step, read_existing_apps, read_requests
 from shikigami.tokens import TokenSource
 
 PROPOSAL = """Shikigami's onboarding of `{app}` (D82): its {what}, derived - the request picks none of it.
@@ -398,6 +398,12 @@ class Activities:
             activity.logger.info("%s: runner records left to Charon (Shikigami isn't admin)", app)
             return 0
         return await delete_runners(self._http, s.gitea_url, token, s.apps_org, app)
+
+    @activity.defn
+    async def retire_mark(self, app: str, status: str) -> str:
+        """Thoth's side of the pass (D85): decommissioning at its start, retained at its end."""
+        token = await self._thoth_tokens.get()
+        return await mark_retire_step(self._http, self._settings.thoth_url, token, app, status)
 
     @activity.defn
     async def retire_archive(self, app: str) -> bool:

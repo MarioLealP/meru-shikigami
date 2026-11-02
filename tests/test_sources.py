@@ -3,11 +3,19 @@ import json
 import tarfile
 
 import httpx2
+import pytest
 import yaml
 
 from shikigami.models import RequestsSnapshot
 from shikigami.request_format import App
-from shikigami.sources import Proposal, check_proposal, declare_apps, read_existing_apps, read_requests
+from shikigami.sources import (
+    Proposal,
+    check_proposal,
+    declare_apps,
+    mark_retire_step,
+    read_existing_apps,
+    read_requests,
+)
 
 ECHO = b"""\
 apiVersion: meru.clockmost.com/v1
@@ -133,3 +141,33 @@ async def test_problems_main_already_has_are_not_blamed_on_the_proposal():
 async def test_not_yaml_is_a_problem_not_a_crash():
     verdict = await check({"apps/echo.yaml": ECHO}, "apps/golem.yaml", "spec: [unclosed")
     assert len(verdict.problems) == 1 and verdict.problems[0].startswith("apps/golem.yaml: not YAML")
+
+
+async def test_retire_steps_are_told_to_thoth():
+    seen = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen.append((request.url.path, request.headers["authorization"], json.loads(request.content)))
+        return httpx2.Response(200, json={"status": "decommissioning"})
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http:
+        assert await mark_retire_step(http, "http://thoth", "tok", "golem", "decommissioning") == "decommissioning"
+    assert seen == [
+        (
+            "/v1/retire-steps",
+            "Bearer tok",
+            {"app": "golem", "status": "decommissioning", "reason": "Shikigami's retire pass (D85)"},
+        )
+    ]
+
+
+@pytest.mark.parametrize("status", [403, 404, 409])
+async def test_a_refused_retire_step_is_said_and_never_stops_the_pass(status: int):
+    async def call(code: int) -> str:
+        transport = httpx2.MockTransport(lambda request: httpx2.Response(code, json={"detail": "no"}))
+        async with httpx2.AsyncClient(transport=transport) as http:
+            return await mark_retire_step(http, "http://thoth", "tok", "golem", "retained")
+
+    assert (await call(status)).startswith(f"not marked retained: Thoth answered {status}")
+    with pytest.raises(httpx2.HTTPStatusError):  # a server error is retried by the activity
+        await call(503)
