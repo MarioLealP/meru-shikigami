@@ -5,8 +5,8 @@ name: shikigami
 owner: mario
 image:
   repository: zot.clockmost.com/meru/shikigami
-  digest: sha256:d0e830ae999bd3672891e0f7d27c4a1dce996f428355d84a92098dcbaf0af3d2
-  tag: "c502c6859791"
+  digest: sha256:8332d32b1d8effd4d10a11d1828703c5e4fdd09df122183c9a8e23a552376fd0
+  tag: "308f1f242888"
 port: 8080
 # Fixed, so Gitea (outside the cluster) can send Meru/requests' webhook to http://10.43.0.60/ping.
 clusterIP: 10.43.0.60
