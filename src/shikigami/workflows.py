@@ -2,7 +2,7 @@
 deterministic: no I/O, clock or randomness here - that all lives in the activities."""
 
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
@@ -44,6 +44,10 @@ class AppWorkflow:
                 Activities.retire_mark, args=[action.app, "planned"], start_to_close_timeout=TIMEOUT, retry_policy=RETRY
             )
             workflow.logger.info("app %s: restore - Thoth %s", action.app, said)
+            unmarked = await workflow.execute_activity_method(
+                Activities.restore_unmark_namespaces, action.app, start_to_close_timeout=TIMEOUT, retry_policy=RETRY
+            )
+            workflow.logger.info("app %s: restore - removed-at off %s", action.app, unmarked or "(no namespace)")
         if action.kind != "retire" and action.template and action.description:
             created = await workflow.execute_activity_method(
                 Activities.ensure_repo,
@@ -74,7 +78,7 @@ class AppWorkflow:
                 if deploy == "kept":  # marker in (Xolotl merged it, D99): the repo is the app's now (D89)
                     await self._first_build_then_lock_out(action.app)
         if action.kind == "retire" and action.template:  # removed by its request (D83); no request at all: dry run
-            await self._retire(action.app)
+            await self._retire(action.app, action.removed_at)
             return
         await workflow.execute_activity_method(
             Activities.dry_run, action, start_to_close_timeout=TIMEOUT, retry_policy=RETRY
@@ -90,7 +94,7 @@ class AppWorkflow:
         except WorkflowAlreadyStartedError:
             workflow.logger.info("app %s: first build still watched - lock-out follows it", app)
 
-    async def _retire(self, app: str) -> None:
+    async def _retire(self, app: str, removed_at: datetime | None) -> None:
         """D85, in order: the stop must be applied before the Application goes - preserveResourcesOnDeletion would
         leave running pods behind - and the trust goes once nothing uses it. The repo is archived last. Thoth hears
         decommissioning at the start and retained once every step is done (only Anubis retires)."""
@@ -122,6 +126,13 @@ class AppWorkflow:
         workflow.logger.info("app %s: retire - Zot login %s", app, "revoked" if zot else "already gone")
         archived = await step(Activities.retire_archive)
         workflow.logger.info("app %s: retire - repo %s", app, "archived" if archived else "not archived here")
+        marked = await workflow.execute_activity_method(
+            Activities.retire_mark_namespaces,
+            args=[app, removed_at],
+            start_to_close_timeout=TIMEOUT,
+            retry_policy=RETRY,
+        )
+        workflow.logger.info("app %s: retire - removed-at on %s", app, marked or "(no namespace)")
         await mark("retained")
 
 

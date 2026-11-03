@@ -1,6 +1,7 @@
 """The data Shikigami's workflows pass around (Temporal stores it as JSON in its history). No I/O imports here:
 workflow code imports this inside Temporal's sandbox."""
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel
@@ -37,3 +38,4 @@ class AppAction(BaseModel):
     description: str | None = None
     owner: str | None = None
     secrets: list[str] = []  # the request's secret names (D99), wired into deploy/values.yaml with the marker
+    removed_at: datetime | None = None  # removedAt (Xolotl's stamp): the retire pass marks the namespaces with it

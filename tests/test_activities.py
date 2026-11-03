@@ -1,5 +1,6 @@
 import base64
 import json
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx2
@@ -744,3 +745,65 @@ async def test_with_no_build_yet_the_first_one_is_started_and_watched():
     with pytest.raises(ApplicationError, match="first build started"):
         await ActivityEnvironment().run(activities.first_build, "echo")
     assert "POST /actions/workflows/ci.yaml/dispatches" in calls
+
+
+def marking(tmp_path: Path, namespaces: dict[str, dict[str, str]], refuse: int | None = None):
+    """Activities whose cluster holds `namespaces` (name -> annotations); merge patches land in them."""
+
+    def kubernetes(request: httpx2.Request) -> httpx2.Response:
+        assert request.headers["authorization"] == "Bearer kube-token"
+        assert request.method == "PATCH" and request.headers["content-type"] == "application/merge-patch+json"
+        name = request.url.path.removeprefix("/api/v1/namespaces/")
+        if name not in namespaces:
+            return httpx2.Response(404, json={})
+        if refuse:
+            return httpx2.Response(refuse, json={"message": "denied"})
+        for key, value in json.loads(request.content)["metadata"]["annotations"].items():
+            if value is None:
+                namespaces[name].pop(key, None)
+            else:
+                namespaces[name][key] = value
+        return httpx2.Response(200, json={})
+
+    (tmp_path / "token").write_text("kube-token\n")
+    settings = Settings.model_construct(kubernetes_url="https://kube.test", kubernetes_dir=tmp_path)
+    kube, http = httpx2.AsyncClient(transport=httpx2.MockTransport(kubernetes)), httpx2.AsyncClient()
+    return Activities(settings, http, TokenSource(http, "https://auth.test/token/", "thoth", TOKEN_FILE), kube)
+
+
+async def test_retire_marks_both_namespaces_with_the_requests_removed_at(tmp_path: Path):
+    cluster: dict[str, dict[str, str]] = {"golem": {}, "golem-build": {"keep": "me"}}
+    activities = marking(tmp_path, cluster)
+    removed_at = datetime(2026, 11, 3, 13, 31, 18, tzinfo=timezone(timedelta(hours=1)))
+    marked = await ActivityEnvironment().run(activities.retire_mark_namespaces, "golem", removed_at)
+    assert marked == ["golem", "golem-build"]
+    assert cluster == {
+        "golem": {"meru.clockmost.com/removed-at": "2026-11-03T12:31:18Z"},  # UTC, as Xolotl stamps it
+        "golem-build": {"keep": "me", "meru.clockmost.com/removed-at": "2026-11-03T12:31:18Z"},
+    }
+
+
+async def test_a_missing_namespace_is_skipped_not_an_error(tmp_path: Path):
+    activities = marking(tmp_path, {"golem": {}})  # no build namespace (build: false)
+    removed_at = datetime(2026, 11, 3, 12, 31, 18, tzinfo=UTC)
+    assert await ActivityEnvironment().run(activities.retire_mark_namespaces, "golem", removed_at) == ["golem"]
+
+
+async def test_a_retire_without_removed_at_stops_for_good(tmp_path: Path):
+    activities = marking(tmp_path, {"golem": {}})
+    with pytest.raises(ApplicationError, match="no removedAt") as raised:
+        await ActivityEnvironment().run(activities.retire_mark_namespaces, "golem", None)
+    assert raised.value.non_retryable
+
+
+async def test_a_refused_mark_is_retried(tmp_path: Path):
+    activities = marking(tmp_path, {"golem": {}}, refuse=403)  # Meru/meru's rbac not merged yet: wait for it
+    with pytest.raises(httpx2.HTTPStatusError):
+        await ActivityEnvironment().run(activities.retire_mark_namespaces, "golem", datetime(2026, 11, 3, tzinfo=UTC))
+
+
+async def test_restore_takes_the_mark_off(tmp_path: Path):
+    cluster = {"golem": {"meru.clockmost.com/removed-at": "2026-11-03T12:31:18Z", "keep": "me"}, "golem-build": {}}
+    activities = marking(tmp_path, cluster)
+    assert await ActivityEnvironment().run(activities.restore_unmark_namespaces, "golem") == ["golem", "golem-build"]
+    assert cluster == {"golem": {"keep": "me"}, "golem-build": {}}
