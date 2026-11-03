@@ -16,7 +16,7 @@ from shikigami.config import Settings
 from shikigami.models import AppAction, ExistingApp, RequestsSnapshot
 from shikigami.namespaces import set_removed_at, stamp
 from shikigami.openbao import KV
-from shikigami.proposals import Edit, ProposalFailed, find_pr, open_pr
+from shikigami.proposals import Edit, ProposalFailed, Pull, find_pr, open_pr
 from shikigami.repos import (
     NoTemplate,
     add_writer,
@@ -229,17 +229,23 @@ class Activities:
         self, repo: str, title: str, titles: list[str], topic: str, description: str, files: Mapping[str, Edit]
     ) -> str:
         """One AGit PR with `title`, unless the newest PR among `titles` already is one: open -> waiting on it,
-        merged -> not on main yet, closed unmerged -> a rejection, never proposed again. Each Edit's `before` must
-        still be on main at the push (MainMoved otherwise: retried, so the change is worked out again)."""
+        merged -> not on main yet, closed unmerged -> a rejection, never proposed again. An open one that conflicts
+        with a newer main (another app's PR to the same file merged first) is rebuilt in place - same PR, pushed again
+        on top of main - and Xolotl checks the new commit like any other. Each Edit's `before` must still be on main
+        at the push (MainMoved otherwise: retried, so the change is worked out again)."""
         s = self._settings
         where = f"{s.apps_org}/{repo}"
         pr = await find_pr(self._http, s.gitea_url, s.apps_org, repo, titles)
+        rebuild = False
         if pr is not None and pr.title == title:
             if pr.state == "open":
-                return f"waiting on {where}#{pr.number}"
-            if pr.merged:
+                if not await self._conflicts_with_newer_main(repo, pr):
+                    return f"waiting on {where}#{pr.number}"
+                rebuild = True
+            elif pr.merged:
                 return f"{where}#{pr.number} merged, not on main yet"
-            return f"{where}#{pr.number} was closed unmerged - not proposed again"
+            else:
+                return f"{where}#{pr.number} was closed unmerged - not proposed again"
         try:
             await open_pr(
                 f"{s.gitea_url}/{where}.git",
@@ -250,11 +256,24 @@ class Activities:
                 description,
                 {path: edit.after for path, edit in files.items()},
                 {path: edit.before for path, edit in files.items()},
+                force=rebuild,
             )
         except ProposalFailed as e:
             raise ApplicationError(str(e)) from e  # retried: a push can fail on the network too
+        if rebuild and pr is not None:
+            activity.logger.info("%s rebuilt on main in %s#%d", title, where, pr.number)
+            return f"re-proposed in {where}#{pr.number} (it conflicted with main)"  # "proposed in": Xolotl is pinged
         activity.logger.info("%s proposed in %s", title, where)
         return f"proposed in {where}"
+
+    async def _conflicts_with_newer_main(self, repo: str, pr: Pull) -> bool:
+        """Gitea says it can't merge and main has moved past the commit it was built on. Gitea's flag alone isn't
+        enough: it reads false for a moment after every push while Gitea checks - a fresh PR, built on today's main,
+        is never rebuilt."""
+        if pr.mergeable or pr.base is None:
+            return False
+        s = self._settings
+        return pr.base.sha != await head(self._http, s.gitea_url, None, s.apps_org, repo)
 
     # The retire pass (D85), in this order, each step keeping what's done: stop -> wait for Argo -> park the marker ->
     # removal PRs -> revoke runner (+ the Zot login, BuildActivities) -> archive. Deletes nothing: Charon purges later.

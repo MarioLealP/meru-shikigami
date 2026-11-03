@@ -137,7 +137,7 @@ async def deploy(
     """ensure_deploy_files over the fake Gitea; the AGit PR it opens is recorded among the calls."""
     calls: list[dict] = []
 
-    async def fake_open_pr(remote, user, token, topic, title, description, files, read):
+    async def fake_open_pr(remote, user, token, topic, title, description, files, read, force=False):
         calls.append({"pr": {"remote": remote, "topic": topic, "title": title, "files": files, "read": read}})
 
     with pytest.MonkeyPatch.context() as m:
@@ -277,8 +277,18 @@ async def onboard_trust(
     opened: list[dict] = []
     PINGS.clear()
 
-    async def fake_open_pr(remote, user, token, topic, title, description, files, read):
-        opened.append({"remote": remote, "user": user, "topic": topic, "title": title, "files": files, "read": read})
+    async def fake_open_pr(remote, user, token, topic, title, description, files, read, force=False):
+        opened.append(
+            {
+                "remote": remote,
+                "user": user,
+                "topic": topic,
+                "title": title,
+                "files": files,
+                "read": read,
+                "force": force,
+            }
+        )
 
     monkeypatch.setattr("shikigami.activities.open_pr", fake_open_pr)
 
@@ -354,6 +364,37 @@ async def test_an_open_or_rejected_pr_is_never_proposed_again(monkeypatch: pytes
         "fence waiting on Meru/meru#4; key Meru/kyverno#2 was closed unmerged - not proposed again; push rule proposed"
     )
     assert [pr["title"] for pr in opened] == ["chore(trust): onboard golem - push rule"]
+
+
+def fence_pr(**kw: object) -> dict[str, list[dict]]:
+    return {"meru": [{"number": 47, "title": "chore(trust): onboard golem - fence", "state": "open", **kw}]}
+
+
+MAIN_NOW = {"meru/branches/main": '{"name": "main", "commit": {"id": "main-now"}}'}
+
+
+async def test_an_open_pr_that_conflicts_with_a_newer_main_is_rebuilt_in_place(monkeypatch: pytest.MonkeyPatch):
+    pulls = fence_pr(mergeable=False, base={"sha": "main-before"})  # another app's fence merged first
+    result, opened = await onboard_trust(monkeypatch, {**TRUST_REPOS, **MAIN_NOW}, pulls)
+    assert result.startswith("fence re-proposed in Meru/meru#47 (it conflicted with main)")
+    fence = next(pr for pr in opened if pr["title"] == "chore(trust): onboard golem - fence")
+    assert fence["force"] and fence["topic"] == "onboard-golem"  # the same AGit topic: the same PR, pushed again
+    assert "  - projects/golem.yaml\n" in fence["files"]["kustomization.yaml"]  # worked out against today's main
+    assert PINGS == ["POST /ping"]  # Xolotl checks the new commit now
+
+
+@pytest.mark.parametrize(
+    "pr",
+    [
+        {"mergeable": True, "base": {"sha": "main-before"}},  # behind main but merges cleanly: Gitea handles it
+        {"mergeable": False, "base": {"sha": "main-now"}},  # just pushed: Gitea still checking, not a conflict
+        {"mergeable": False},  # no base reported: never guess
+    ],
+)
+async def test_an_open_pr_is_left_alone_unless_it_conflicts_with_a_newer_main(monkeypatch: pytest.MonkeyPatch, pr):
+    result, opened = await onboard_trust(monkeypatch, {**TRUST_REPOS, **MAIN_NOW}, fence_pr(**pr))
+    assert result.startswith("fence waiting on Meru/meru#47")
+    assert not any(o["force"] for o in opened)
 
 
 async def test_another_key_for_the_app_is_never_swapped_in(monkeypatch: pytest.MonkeyPatch):
@@ -465,8 +506,8 @@ ARGO_RUNNING = {
 def opened_prs(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     opened: list[dict] = []
 
-    async def fake_open_pr(remote, user, token, topic, title, description, files, read):
-        opened.append({"remote": remote, "topic": topic, "title": title, "files": files, "read": read})
+    async def fake_open_pr(remote, user, token, topic, title, description, files, read, force=False):
+        opened.append({"remote": remote, "topic": topic, "title": title, "files": files, "read": read, "force": force})
 
     monkeypatch.setattr("shikigami.activities.open_pr", fake_open_pr)
     return opened
@@ -581,7 +622,7 @@ TRUSTED_GOLEM = {
 async def test_retiring_trust_proposes_three_removal_prs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     opened: list[dict] = []
 
-    async def fake_open_pr(remote, user, token, topic, title, description, files, read):
+    async def fake_open_pr(remote, user, token, topic, title, description, files, read, force=False):
         opened.append({"topic": topic, "title": title, "files": files, "read": read, "description": description})
 
     monkeypatch.setattr("shikigami.activities.open_pr", fake_open_pr)
