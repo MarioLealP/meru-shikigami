@@ -27,10 +27,11 @@ class ExistingApp(BaseModel):
 
 class AppAction(BaseModel):
     """One app's pass: register a new one, update a changed one, check one that matches (every requested app runs its
-    steps on every sync, each keeping what exists), or retire one whose request is gone."""
+    steps on every sync, each keeping what exists), retire one whose request is gone, or restore a retired one whose
+    request is back - onboarding again (D106)."""
 
     app: str
-    kind: Literal["register", "update", "check", "retire"]
+    kind: Literal["register", "update", "check", "retire", "restore"]
     reasons: list[str]
     template: str | None = None  # requested apps only
     description: str | None = None

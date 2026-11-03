@@ -15,6 +15,8 @@ def plan(apps: dict[str, App], existing: dict[str, ExistingApp]) -> list[AppActi
             kind, reason = "retire", "removed by its request (D83)"
         elif current is None or current.status == "retired":
             kind, reason = "register", "requested, not in Thoth"
+        elif current.status in ("decommissioning", "retained"):
+            kind, reason = "restore", f"{current.status}, its request is back (D106)"
         elif current.template != spec.template:
             kind, reason = "update", f"template {current.template!r} -> {spec.template!r}"
         else:

@@ -301,8 +301,8 @@ class Activities:
             }
         except trust.BadLayout as e:
             raise ApplicationError(str(e), non_retryable=True) from e
-        title = retire_title("stop", app)
-        return await self._open_once(app, title, [title], f"retire-stop-{app}", STOP.format(app=app), files)
+        title, again = retire_title("stop", app), [marker.TITLE.format(app=app)]  # a newer marker PR: retired again
+        return await self._open_once(app, title, [title, *again], f"retire-stop-{app}", STOP.format(app=app), files)
 
     async def _park_pr(self, app: str) -> str:
         marker_text = await self._public(app, "deploy/meru.yaml")
@@ -312,8 +312,8 @@ class Activities:
             files: dict[str, str | None] = {"deploy/meru.yaml.in": retire.parked(marker_text), "deploy/meru.yaml": None}
         except trust.BadLayout as e:
             raise ApplicationError(str(e), non_retryable=True) from e
-        title = retire_title("park", app)
-        return await self._open_once(app, title, [title], f"retire-park-{app}", PARK.format(app=app), files)
+        title, again = retire_title("park", app), [marker.TITLE.format(app=app)]
+        return await self._open_once(app, title, [title, *again], f"retire-park-{app}", PARK.format(app=app), files)
 
     @activity.defn
     async def retire_wait_stopped(self, app: str) -> str:
@@ -448,7 +448,7 @@ class Activities:
                 if secrets:
                     raise marker.BadTemplate("no deploy/values.yaml to wire the request's secrets into")
             else:
-                text = values[0]
+                text = retire.restarted_values(values[0])  # a restore (D106): the stop's line goes with the park
                 if marker.owner_unset(text):
                     text = marker.with_owner(text, owner, "deploy/values.yaml")
                 text = marker.with_secrets(text, secrets or [], "deploy/values.yaml")
@@ -456,13 +456,17 @@ class Activities:
                     files["deploy/values.yaml"] = text
         except marker.BadTemplate as e:
             raise ApplicationError(str(e), non_retryable=True) from e
-        # Xolotl merges it: Write now, not only at the lock-out (D89) - Shikigami is still admin here.
-        if not await add_writer(self._http, s.gitea_url, token, org, app, s.merger_user):
+        # Xolotl merges it: Write now, not only at the lock-out (D89). A repo Shikigami already left (a restore, D106)
+        # kept Xolotl's Write from the first onboarding - and Shikigami couldn't give it anyway.
+        if await is_admin(self._http, s.gitea_url, token, org, app) and not await add_writer(
+            self._http, s.gitea_url, token, org, app, s.merger_user
+        ):
             return f"waiting: no {s.merger_user} user to merge the marker PR"
+        title = marker.TITLE.format(app=app)
         opened = await self._open_once(
             app,
-            marker.TITLE.format(app=app),
-            [marker.TITLE.format(app=app)],
+            title,
+            [title, retire_title("park", app)],  # after a retire, the newer park PR means: propose the marker again
             f"deploy-{app}",
             DEPLOY_PR.format(
                 app=app,
