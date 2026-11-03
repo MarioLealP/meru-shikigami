@@ -5,7 +5,7 @@ from pathlib import Path
 import httpx2
 import pytest
 
-from shikigami.proposals import AUTHOR, ProposalFailed, find_pr, open_pr
+from shikigami.proposals import AUTHOR, MainMoved, ProposalFailed, find_pr, open_pr
 
 # Like Gitea for a reader (routers/private/serv.go): only refs/for/* pushes get in; anything else is refused.
 HOOK = """#!/bin/sh
@@ -53,6 +53,7 @@ async def test_a_proposal_is_one_commit_pushed_to_refs_for_main_with_its_options
         "chore(trust): onboard golem - fence",
         "line one\nline two",
         {"projects/golem.yaml": "kind: AppProject\n", "kustomization.yaml": "resources: [x]\n"},
+        {"projects/golem.yaml": None, "kustomization.yaml": "resources: []\n"},
     )
     options = (remote / "push-options").read_text().splitlines()
     assert options[:2] == ["topic=onboard-golem", "title=chore(trust): onboard golem - fence"]
@@ -76,6 +77,7 @@ async def test_none_deletes_a_file_in_the_proposal(remote: Path):
         "chore(trust): retire golem - fence",
         "d",
         {"kustomization.yaml": None},
+        {"kustomization.yaml": "resources: []\n"},
     )
     commit = git(remote, "rev-parse", "refs/for/main").strip()
     assert git(remote, "ls-tree", "--name-only", commit).strip() == ""  # the seed's only file is gone
@@ -85,7 +87,27 @@ async def test_none_deletes_a_file_in_the_proposal(remote: Path):
 async def test_a_refused_push_says_why(remote: Path):
     (remote / "hooks" / "pre-receive").write_text("#!/bin/sh\necho 'User permission denied for writing.' >&2\nexit 1\n")
     with pytest.raises(ProposalFailed, match="permission denied"):
-        await open_pr(f"file://{remote}", "shikigami", "tok", "t", "title", "d", {"a.yaml": "a: 1\n"})
+        await open_pr(f"file://{remote}", "shikigami", "tok", "t", "title", "d", {"a.yaml": "a: 1\n"}, {"a.yaml": None})
+
+
+@pytest.mark.parametrize(
+    ("read", "why"),
+    [
+        ({"kustomization.yaml": "resources: [kitsune]\n"}, "kustomization.yaml changed"),  # another PR merged since
+        ({"kustomization.yaml": None}, "kustomization.yaml changed"),  # read as absent, there now
+    ],
+)
+async def test_a_file_that_moved_on_main_since_it_was_read_is_never_pushed(remote: Path, read: dict, why: str):
+    """Meru/zot#21: a change worked out from an older main would undo whatever merged in between."""
+    with pytest.raises(MainMoved, match=why):
+        await open_pr(f"file://{remote}", "shikigami", "tok", "t", "title", "d", {"kustomization.yaml": "x\n"}, read)
+    assert not (remote / "push-options").exists()  # nothing reached Gitea
+    assert git(remote, "for-each-ref", "refs/for").strip() == ""
+
+
+async def test_read_must_name_exactly_the_changed_files(remote: Path):
+    with pytest.raises(ValueError, match="read must name"):
+        await open_pr(f"file://{remote}", "shikigami", "tok", "t", "title", "d", {"a.yaml": "a\n"}, {})
 
 
 async def test_find_pr_matches_the_exact_title_open_or_closed():

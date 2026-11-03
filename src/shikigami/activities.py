@@ -14,7 +14,7 @@ from shikigami.argo import application, not_stopped
 from shikigami.config import Settings
 from shikigami.models import AppAction, ExistingApp, RequestsSnapshot
 from shikigami.openbao import KV
-from shikigami.proposals import ProposalFailed, find_pr, open_pr
+from shikigami.proposals import Edit, ProposalFailed, find_pr, open_pr
 from shikigami.repos import (
     NoTemplate,
     add_writer,
@@ -156,37 +156,41 @@ class Activities:
                 parts.append(f"{label} {await self._propose(app, repo, what, files)}")
         return await self._ping_merger("; ".join(parts))
 
-    async def _fence_files(self, app: str, description: str) -> dict[str, str]:
+    async def _fence_files(self, app: str, description: str) -> dict[str, Edit]:
         org, path = self._settings.apps_org, f"projects/{app}.yaml"
         if await public_file(self._http, self._settings.gitea_url, org, "meru", path) is not None:
             return {}
         kustomization = await self._required(org, "meru", "kustomization.yaml")
         return {
-            path: trust.fence(app, description),
-            "kustomization.yaml": trust.with_resource(kustomization, "projects", path),
+            path: Edit(before=None, after=trust.fence(app, description)),
+            "kustomization.yaml": Edit(
+                before=kustomization, after=trust.with_resource(kustomization, "projects", path)
+            ),
         }
 
-    async def _key_files(self, app: str, public_key: str) -> dict[str, str] | trust.Conflict:
+    async def _key_files(self, app: str, public_key: str) -> dict[str, Edit] | trust.Conflict:
         org, exception = self._settings.apps_org, f"exceptions/{app}-build.yaml"
         current = await self._required(org, "kyverno", "keys/meru-signing-keys.yaml")
         try:
             updated = trust.with_key(current, app, public_key)
         except trust.Conflict as e:
             return e
-        files = {"keys/meru-signing-keys.yaml": updated} if updated != current else {}
+        files = {"keys/meru-signing-keys.yaml": Edit(before=current, after=updated)} if updated != current else {}
         if await public_file(self._http, self._settings.gitea_url, org, "kyverno", exception) is None:
             kustomization = await self._required(org, "kyverno", "kustomization.yaml")
-            files[exception] = trust.build_exception(app)
-            files["kustomization.yaml"] = trust.with_resource(kustomization, "exceptions", exception)
+            files[exception] = Edit(before=None, after=trust.build_exception(app))
+            files["kustomization.yaml"] = Edit(
+                before=kustomization, after=trust.with_resource(kustomization, "exceptions", exception)
+            )
         return files
 
-    async def _push_rule_files(self, app: str) -> dict[str, str] | trust.Conflict:
+    async def _push_rule_files(self, app: str) -> dict[str, Edit] | trust.Conflict:
         current = await self._required(self._settings.apps_org, "zot", "config.json")
         try:
             updated = trust.with_push_rule(current, app)
         except trust.Conflict as e:
             return e
-        return {"config.json": updated} if updated != current else {}
+        return {"config.json": Edit(before=current, after=updated)} if updated != current else {}
 
     async def _required(self, org: str, repo: str, path: str) -> str:
         text = await public_file(self._http, self._settings.gitea_url, org, repo, path)
@@ -205,7 +209,7 @@ class Activities:
         return result
 
     async def _propose(
-        self, app: str, repo: str, what: str, files: Mapping[str, str | None], direction: str = "onboard"
+        self, app: str, repo: str, what: str, files: Mapping[str, Edit], direction: str = "onboard"
     ) -> str:
         if not files:
             return "kept"
@@ -220,10 +224,11 @@ class Activities:
         )
 
     async def _open_once(
-        self, repo: str, title: str, titles: list[str], topic: str, description: str, files: Mapping[str, str | None]
+        self, repo: str, title: str, titles: list[str], topic: str, description: str, files: Mapping[str, Edit]
     ) -> str:
         """One AGit PR with `title`, unless the newest PR among `titles` already is one: open -> waiting on it,
-        merged -> not on main yet, closed unmerged -> a rejection, never proposed again."""
+        merged -> not on main yet, closed unmerged -> a rejection, never proposed again. Each Edit's `before` must
+        still be on main at the push (MainMoved otherwise: retried, so the change is worked out again)."""
         s = self._settings
         where = f"{s.apps_org}/{repo}"
         pr = await find_pr(self._http, s.gitea_url, s.apps_org, repo, titles)
@@ -241,7 +246,8 @@ class Activities:
                 topic,
                 title,
                 description,
-                files,
+                {path: edit.after for path, edit in files.items()},
+                {path: edit.before for path, edit in files.items()},
             )
         except ProposalFailed as e:
             raise ApplicationError(str(e)) from e  # retried: a push can fail on the network too
@@ -296,8 +302,8 @@ class Activities:
             return "kept"
         try:
             files = {
-                "deploy/values.yaml": retire.stopped_values(values),
-                "deploy/meru.yaml": retire.stopped_marker(marker_text),
+                "deploy/values.yaml": Edit(before=values, after=retire.stopped_values(values)),
+                "deploy/meru.yaml": Edit(before=marker_text, after=retire.stopped_marker(marker_text)),
             }
         except trust.BadLayout as e:
             raise ApplicationError(str(e), non_retryable=True) from e
@@ -308,8 +314,12 @@ class Activities:
         marker_text = await self._public(app, "deploy/meru.yaml")
         if marker_text is None:
             return "kept"
+        template = await self._public(app, "deploy/meru.yaml.in")
         try:
-            files: dict[str, str | None] = {"deploy/meru.yaml.in": retire.parked(marker_text), "deploy/meru.yaml": None}
+            files = {
+                "deploy/meru.yaml.in": Edit(before=template, after=retire.parked(marker_text)),
+                "deploy/meru.yaml": Edit(before=marker_text, after=None),
+            }
         except trust.BadLayout as e:
             raise ApplicationError(str(e), non_retryable=True) from e
         title, again = retire_title("park", app), [marker.TITLE.format(app=app)]
@@ -364,21 +374,31 @@ class Activities:
         org = self._settings.apps_org
         fence, exception = f"projects/{app}.yaml", f"exceptions/{app}-build.yaml"
         try:
-            meru: dict[str, str | None] = {}
-            if await public_file(self._http, self._settings.gitea_url, org, "meru", fence) is not None:
+            meru: dict[str, Edit] = {}
+            if (fence_text := await public_file(self._http, self._settings.gitea_url, org, "meru", fence)) is not None:
                 kustomization = await self._required(org, "meru", "kustomization.yaml")
-                meru = {fence: None, "kustomization.yaml": trust.without_resource(kustomization, fence)}
-            kyverno: dict[str, str | None] = {}
+                meru = {
+                    fence: Edit(before=fence_text, after=None),
+                    "kustomization.yaml": Edit(
+                        before=kustomization, after=trust.without_resource(kustomization, fence)
+                    ),
+                }
+            kyverno: dict[str, Edit] = {}
             keys = await self._required(org, "kyverno", "keys/meru-signing-keys.yaml")
             if (fewer := trust.without_key(keys, app)) != keys:
-                kyverno["keys/meru-signing-keys.yaml"] = fewer
-            if await public_file(self._http, self._settings.gitea_url, org, "kyverno", exception) is not None:
+                kyverno["keys/meru-signing-keys.yaml"] = Edit(before=keys, after=fewer)
+            exception_text = await public_file(self._http, self._settings.gitea_url, org, "kyverno", exception)
+            if exception_text is not None:
                 kustomization = await self._required(org, "kyverno", "kustomization.yaml")
-                kyverno[exception] = None
-                kyverno["kustomization.yaml"] = trust.without_resource(kustomization, exception)
+                kyverno[exception] = Edit(before=exception_text, after=None)
+                kyverno["kustomization.yaml"] = Edit(
+                    before=kustomization, after=trust.without_resource(kustomization, exception)
+                )
             config = await self._required(org, "zot", "config.json")
-            zot: dict[str, str | None] = (
-                {"config.json": rule} if (rule := trust.without_push_rule(config, app)) != config else {}
+            zot: dict[str, Edit] = (
+                {"config.json": Edit(before=config, after=rule)}
+                if (rule := trust.without_push_rule(config, app)) != config
+                else {}
             )
         except trust.BadLayout as e:
             raise ApplicationError(str(e), non_retryable=True) from e
@@ -440,9 +460,11 @@ class Activities:
             return "waiting: no deploy/meru.yaml.in (repo generated before the template had it)"
         values = await read_file(self._http, s.gitea_url, token, org, app, "deploy/values.yaml")
         try:
-            files: dict[str, str | None] = {
-                "deploy/meru.yaml": marker.with_owner(template[0], owner, "deploy/meru.yaml.in"),
-                "deploy/meru.yaml.in": None,
+            files = {
+                "deploy/meru.yaml": Edit(
+                    before=None, after=marker.with_owner(template[0], owner, "deploy/meru.yaml.in")
+                ),
+                "deploy/meru.yaml.in": Edit(before=template[0], after=None),
             }
             if values is None:
                 if secrets:
@@ -453,7 +475,7 @@ class Activities:
                     text = marker.with_owner(text, owner, "deploy/values.yaml")
                 text = marker.with_secrets(text, secrets or [], "deploy/values.yaml")
                 if text != values[0]:
-                    files["deploy/values.yaml"] = text
+                    files["deploy/values.yaml"] = Edit(before=values[0], after=text)
         except marker.BadTemplate as e:
             raise ApplicationError(str(e), non_retryable=True) from e
         # Xolotl merges it: Write now, not only at the lock-out (D89). A repo Shikigami already left (a restore, D106)
