@@ -66,6 +66,22 @@ async def test_a_proposal_is_one_commit_pushed_to_refs_for_main_with_its_options
     assert git(remote, "show", f"{commit}:projects/golem.yaml") == "kind: AppProject\n"
     assert git(remote, "rev-list", "--count", commit).strip() == "2"  # on top of main, one commit
     assert git(remote, "rev-list", "--count", "main").strip() == "1"  # main untouched
+    assert "force-push=true" not in options  # a new PR is never forced
+
+
+async def test_a_rebuild_is_the_only_forced_push(remote: Path):
+    await open_pr(
+        f"file://{remote}",
+        "shikigami",
+        "tok",
+        "onboard-golem",
+        "chore(trust): onboard golem - fence",
+        "d",
+        {"kustomization.yaml": "resources: [x]\n"},
+        {"kustomization.yaml": "resources: []\n"},
+        force=True,
+    )
+    assert (remote / "push-options").read_text().splitlines()[3:] == ["force-push=true"]
 
 
 async def test_none_deletes_a_file_in_the_proposal(remote: Path):

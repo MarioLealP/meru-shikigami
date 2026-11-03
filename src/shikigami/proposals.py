@@ -38,6 +38,10 @@ class Edit(BaseModel):
     after: str | None
 
 
+class _Ref(Incoming):
+    sha: str
+
+
 class Pull(Incoming):
     """A PR as Gitea lists it - the fields the trust steps look at."""
 
@@ -45,6 +49,8 @@ class Pull(Incoming):
     title: str
     state: str  # open | closed
     merged: bool = False
+    mergeable: bool = True  # Gitea's own conflict check; false for a moment after any push, while it checks
+    base: _Ref | None = None  # the main commit the PR was built on
 
 
 _PULLS = TypeAdapter(list[Pull])
@@ -92,11 +98,13 @@ async def open_pr(
     description: str,
     files: Mapping[str, str | None],
     read: Mapping[str, str | None],
+    force: bool = False,
 ) -> None:
     """One commit with `files` (path -> full text, or None to delete it) on top of the remote's main, pushed as an AGit
     PR on `topic`. `read` holds what each of those files was when `files` was worked out (None: absent); if main no
-    longer has exactly that, MainMoved and nothing is pushed. Called only when no PR with this title exists
-    (find_pr): Gitea refuses a different commit on an open topic without force-push, and Shikigami never forces."""
+    longer has exactly that, MainMoved and nothing is pushed. Called when no PR with this title exists (find_pr), or
+    with `force` to rebuild Shikigami's own open PR on `topic` that conflicts with a newer main - the only force-push
+    it makes: same PR, same number, rebuilt on top of what main is now."""
     if set(read) != set(files):
         raise ValueError(f"read must name exactly the changed files: {sorted(files)}, got {sorted(read)}")
     auth = base64.b64encode(f"{user}:{token}".encode()).decode()
@@ -129,6 +137,7 @@ async def open_pr(
             f"title={title}",
             "-o",  # a push option can't hold a newline; Gitea decodes this prefix (services/agit)
             f"description={{base64}}{base64.b64encode(description.encode()).decode()}",
+            *(["-o", "force-push=true"] if force else []),
             env={
                 "GIT_CONFIG_COUNT": "1",
                 "GIT_CONFIG_KEY_0": "http.extraHeader",
