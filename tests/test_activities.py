@@ -136,8 +136,8 @@ async def deploy(
     """ensure_deploy_files over the fake Gitea; the AGit PR it opens is recorded among the calls."""
     calls: list[dict] = []
 
-    async def fake_open_pr(remote, user, token, topic, title, description, files):
-        calls.append({"pr": {"remote": remote, "topic": topic, "title": title, "files": files}})
+    async def fake_open_pr(remote, user, token, topic, title, description, files, read):
+        calls.append({"pr": {"remote": remote, "topic": topic, "title": title, "files": files, "read": read}})
 
     with pytest.MonkeyPatch.context() as m:
         m.setattr("shikigami.activities.open_pr", fake_open_pr)
@@ -276,8 +276,8 @@ async def onboard_trust(
     opened: list[dict] = []
     PINGS.clear()
 
-    async def fake_open_pr(remote, user, token, topic, title, description, files):
-        opened.append({"remote": remote, "user": user, "topic": topic, "title": title, "files": files})
+    async def fake_open_pr(remote, user, token, topic, title, description, files, read):
+        opened.append({"remote": remote, "user": user, "topic": topic, "title": title, "files": files, "read": read})
 
     monkeypatch.setattr("shikigami.activities.open_pr", fake_open_pr)
 
@@ -310,6 +310,11 @@ async def test_a_new_app_gets_one_pr_per_trust_repo(monkeypatch: pytest.MonkeyPa
         "chore(trust): onboard golem - push rule",
     )
     assert '"golem-builder"' in push["files"]["config.json"]
+    assert push["read"] == {"config.json": TRUST_REPOS["zot/raw/config.json"]}
+    assert fence["read"] == {
+        "projects/golem.yaml": None,
+        "kustomization.yaml": TRUST_REPOS["meru/raw/kustomization.yaml"],
+    }
     assert (fence["remote"], fence["user"], fence["topic"]) == (
         "https://git.test/Meru/meru.git",
         "shikigami",
@@ -459,8 +464,8 @@ ARGO_RUNNING = {
 def opened_prs(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     opened: list[dict] = []
 
-    async def fake_open_pr(remote, user, token, topic, title, description, files):
-        opened.append({"remote": remote, "topic": topic, "title": title, "files": files})
+    async def fake_open_pr(remote, user, token, topic, title, description, files, read):
+        opened.append({"remote": remote, "topic": topic, "title": title, "files": files, "read": read})
 
     monkeypatch.setattr("shikigami.activities.open_pr", fake_open_pr)
     return opened
@@ -575,8 +580,8 @@ TRUSTED_GOLEM = {
 async def test_retiring_trust_proposes_three_removal_prs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     opened: list[dict] = []
 
-    async def fake_open_pr(remote, user, token, topic, title, description, files):
-        opened.append({"topic": topic, "title": title, "files": files, "description": description})
+    async def fake_open_pr(remote, user, token, topic, title, description, files, read):
+        opened.append({"topic": topic, "title": title, "files": files, "read": read, "description": description})
 
     monkeypatch.setattr("shikigami.activities.open_pr", fake_open_pr)
     pulls = {
@@ -595,6 +600,13 @@ async def test_retiring_trust_proposes_three_removal_prs(tmp_path: Path, monkeyp
     assert "golem" not in keys["files"]["keys/meru-signing-keys.yaml"]
     assert '"golem-builder"' not in push["files"]["config.json"]
     assert "only removes `golem`'s entries" in fence["description"]
+    # what each change was worked out from: open_pr refuses the push if main moved since (Meru/zot#21)
+    assert push["read"] == {"config.json": TRUSTED_GOLEM["zot/raw/config.json"]}
+    assert fence["read"] == {
+        "projects/golem.yaml": TRUSTED_GOLEM["meru/raw/projects/golem.yaml"],
+        "kustomization.yaml": TRUSTED_GOLEM["meru/raw/kustomization.yaml"],
+    }
+    assert keys["read"]["exceptions/golem-build.yaml"] == TRUSTED_GOLEM["kyverno/raw/exceptions/golem-build.yaml"]
 
 
 async def test_a_restore_proposes_onboarding_again_after_a_merged_retire(monkeypatch: pytest.MonkeyPatch):

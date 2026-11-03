@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import httpx2
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from shikigami.incoming import Incoming
 
@@ -19,6 +19,23 @@ AUTHOR = ("Shikigami (Meru orchestrator)", "shikigami@clockmost.local")  # the b
 
 class ProposalFailed(Exception):
     """git refused (the message is git's, never the token: it travels in a header, not the URL)."""
+
+
+class MainMoved(ProposalFailed):
+    """A file the PR changes is no longer what it was when the change was worked out: another PR merged in between.
+    Pushing the stale text would undo that PR (Meru/zot#21, 2026-11-03), so the activity fails and its retry reads
+    again."""
+
+
+class Edit(BaseModel):
+    """One file of a proposal: its text when it was read (None: it wasn't there) and the text wanted (None: delete
+    it). `before` is what main must still hold when the PR is pushed - a compare-and-swap, like the sha Gitea's file
+    API asks for."""
+
+    model_config = ConfigDict(frozen=True)
+
+    before: str | None
+    after: str | None
 
 
 class Pull(Incoming):
@@ -74,21 +91,29 @@ async def open_pr(
     title: str,
     description: str,
     files: Mapping[str, str | None],
+    read: Mapping[str, str | None],
 ) -> None:
     """One commit with `files` (path -> full text, or None to delete it) on top of the remote's main, pushed as an AGit
-    PR on `topic`. Called only when no PR with this title exists (find_pr): Gitea refuses a different commit on an
-    open topic without force-push, and Shikigami never forces."""
+    PR on `topic`. `read` holds what each of those files was when `files` was worked out (None: absent); if main no
+    longer has exactly that, MainMoved and nothing is pushed. Called only when no PR with this title exists
+    (find_pr): Gitea refuses a different commit on an open topic without force-push, and Shikigami never forces."""
+    if set(read) != set(files):
+        raise ValueError(f"read must name exactly the changed files: {sorted(files)}, got {sorted(read)}")
     auth = base64.b64encode(f"{user}:{token}".encode()).decode()
     with tempfile.TemporaryDirectory(prefix="shikigami-pr-") as tmp:
         work = Path(tmp) / "repo"
         await _git(Path(tmp), "clone", "--quiet", "--depth", "1", "--branch", "main", remote, str(work))
+        for path in files:
+            target = work / path
+            if (target.read_text(encoding="utf-8") if target.is_file() else None) != read[path]:
+                raise MainMoved(f"{path} changed on main since it was read")
         for path, text in files.items():
             target = work / path
             if text is None:
                 target.unlink()
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(text)
+            target.write_text(text, encoding="utf-8")
         await _git(work, "add", "--all", "--", *files)
         name, email = AUTHOR
         await _git(work, "-c", f"user.name={name}", "-c", f"user.email={email}", "commit", "--quiet", "-m", title)
