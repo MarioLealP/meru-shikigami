@@ -306,3 +306,15 @@ async def test_a_retire_pr_ends_the_pass_until_xolotl_merges_it(env: WorkflowEnv
     log: list[str] = []
     await run_sync(env.client, snapshot, {"golem": ExistingApp(key="golem", status="active")}, log, retire=retire)
     assert [line for line in log if line.startswith("retire_")][-1] == last  # nothing after it this pass
+
+
+async def test_a_retained_app_whose_request_is_back_is_marked_planned_then_onboarded(env: WorkflowEnvironment):
+    snapshot = RequestsSnapshot(commit="c1", apps={"echo": ECHO}, databases={}, problems=[])
+    log: list[str] = []
+    retained = ExistingApp(key="echo", status="retained", template="nuwa/python")
+    result, done = await run_sync(env.client, snapshot, {"echo": retained}, log)
+    assert [(a.app, a.kind) for a in result] == [("echo", "restore")]
+    steps = [line for line in log if line.startswith(("ensure_", "retire_", "lock_out"))]
+    assert steps[:2] == ["retire_mark echo planned", "ensure_repo echo nuwa/python"]  # Thoth first (D106)
+    assert "ensure_deploy_files echo mario" in steps and not any(s.startswith("retire_stop") for s in steps)
+    assert [a.kind for a in done] == ["restore"]  # the closing dry-run line, as for any onboarding pass

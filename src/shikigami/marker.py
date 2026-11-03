@@ -53,13 +53,17 @@ def env_name(secret: str) -> str:
 
 def with_secrets(text: str, secrets: list[str], path: str) -> str:
     """deploy/values.yaml with the request's secrets wired (D99): one ExternalSecret `env` (ESO fills it from the
-    app's own OpenBao path) and one env var per name. Appended at the end; a template that already sets either key is
-    refused - its owner's wiring isn't Shikigami's to merge."""
+    app's own OpenBao path) and one env var per name. Appended at the end; kept if that exact block is already there
+    (a restore, D106: the first onboarding wrote it). Any other wiring of either key is refused - its owner's wiring
+    isn't Shikigami's to merge."""
     if not secrets:
         return text
-    if SET_KEYS.search(text):
-        raise BadTemplate(f"{path}: already sets externalSecrets or secretEnv - not wiring the request's secrets in")
     lines = ["", SECRETS_COMMENT, "externalSecrets:", "  env: {}", "secretEnv:"]
     for name in secrets:
         lines += [f"  {env_name(name)}:", "    secret: env", f"    key: {name}"]
-    return (text if text.endswith("\n") else text + "\n") + "\n".join(lines) + "\n"
+    block = "\n".join(lines) + "\n"
+    if text.endswith(block):
+        return text
+    if SET_KEYS.search(text):
+        raise BadTemplate(f"{path}: already sets externalSecrets or secretEnv - not wiring the request's secrets in")
+    return (text if text.endswith("\n") else text + "\n") + block

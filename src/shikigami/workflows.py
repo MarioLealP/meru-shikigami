@@ -39,6 +39,11 @@ class AppWorkflow:
 
     @workflow.run
     async def run(self, action: AppAction) -> None:
+        if action.kind == "restore":  # D106: Thoth first, then onboarding again - every step keeps what exists
+            said = await workflow.execute_activity_method(
+                Activities.retire_mark, args=[action.app, "planned"], start_to_close_timeout=TIMEOUT, retry_policy=RETRY
+            )
+            workflow.logger.info("app %s: restore - Thoth %s", action.app, said)
         if action.kind != "retire" and action.template and action.description:
             created = await workflow.execute_activity_method(
                 Activities.ensure_repo,

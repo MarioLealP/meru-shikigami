@@ -64,11 +64,20 @@ SIGNING_KEYS = "data:\n  echo: |\n    -----BEGIN PUBLIC KEY-----\n    AAAA\n    
 PUBLIC_KEY = "-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\n"
 
 
-def gitea(files: dict[str, str], public: dict[str, str], commits: list[dict], hidden: bool = False) -> Activities:
+def gitea(
+    files: dict[str, str],
+    public: dict[str, str],
+    commits: list[dict],
+    hidden: bool = False,
+    admin: bool = True,
+    pulls: list[dict] | None = None,
+) -> Activities:
     """A Gitea with Meru/echo's files (token reads), public repo files (anonymous raw reads) and a commit endpoint."""
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         path = request.url.path
+        if request.method == "GET" and path == "/api/v1/repos/Meru/echo":
+            return httpx2.Response(200, json={"permissions": {"admin": admin, "push": admin, "pull": True}})
         if request.method == "POST" and path == "/api/v1/repos/Meru/echo/contents":
             commits.append(json.loads(request.content))
             return httpx2.Response(201, json={})
@@ -81,7 +90,7 @@ def gitea(files: dict[str, str], public: dict[str, str], commits: list[dict], hi
             commits.append({"writer": json.loads(request.content)})
             return httpx2.Response(204)
         if path == "/api/v1/repos/Meru/echo/pulls":
-            return httpx2.Response(200, json=[])
+            return httpx2.Response(200, json=pulls or [])
         if str(request.url) == "http://xolotl.test/ping":
             commits.append({"ping": True})
             return httpx2.Response(202, json={})
@@ -117,7 +126,12 @@ READY = {"meru/raw/projects/echo.yaml": "kind: AppProject\n", "kyverno/raw/keys/
 
 
 async def deploy(
-    files: dict[str, str], public: dict[str, str], hidden: bool = False, secrets: list[str] | None = None
+    files: dict[str, str],
+    public: dict[str, str],
+    hidden: bool = False,
+    secrets: list[str] | None = None,
+    admin: bool = True,
+    pulls: list[dict] | None = None,
 ) -> tuple[str, list[dict]]:
     """ensure_deploy_files over the fake Gitea; the AGit PR it opens is recorded among the calls."""
     calls: list[dict] = []
@@ -128,7 +142,7 @@ async def deploy(
     with pytest.MonkeyPatch.context() as m:
         m.setattr("shikigami.activities.open_pr", fake_open_pr)
         result = await ActivityEnvironment().run(
-            gitea(files, public, calls, hidden).ensure_deploy_files, "echo", "mario", PUBLIC_KEY, secrets
+            gitea(files, public, calls, hidden, admin, pulls).ensure_deploy_files, "echo", "mario", PUBLIC_KEY, secrets
         )
     return result, calls
 
@@ -165,11 +179,45 @@ async def test_the_requests_secrets_are_wired_into_values():
     )
 
 
+async def test_a_restore_keeps_the_secrets_the_first_onboarding_wired():
+    _, [_, first, _] = await deploy(TEMPLATE, READY, secrets=["api-key"])
+    wired = first["pr"]["files"]["deploy/values.yaml"]
+    parked = {"deploy/meru.yaml.in": TEMPLATE_IN, "deploy/values.yaml": wired}
+    _, [again, _] = await deploy(parked, READY, secrets=["api-key"], admin=False, pulls=[MERGED_PARK, MERGED_MARKER])
+    assert "deploy/values.yaml" not in again["pr"]["files"]  # already as wanted: not part of the PR
+
+
 async def test_a_template_that_already_wires_secrets_is_not_retried():
     files = {**TEMPLATE, "deploy/values.yaml": VALUES + "secretEnv: {}\n"}
     with pytest.raises(ApplicationError) as raised:
         await deploy(files, READY, secrets=["api-key"])
     assert raised.value.non_retryable and "secretEnv" in str(raised.value)
+
+
+# What a retire leaves in a repo Shikigami already left (D89): the marker parked, the stop's line still in values.
+PARKED = {
+    "deploy/meru.yaml.in": TEMPLATE_IN,
+    "deploy/values.yaml": "name: echo\nowner: mario\nenabled: false # retired (D85): no workload until Charon purges "
+    "the namespace\n",
+}
+MERGED_MARKER = {"number": 2, "title": "chore(deploy): echo is a Meru app", "state": "closed", "merged": True}
+MERGED_PARK = {"number": 5, "title": "chore(retire): park echo", "state": "closed", "merged": True}
+
+
+async def test_a_restore_proposes_the_marker_again_and_undoes_the_stop():
+    result, [opened, _] = await deploy(PARKED, READY, admin=False, pulls=[MERGED_PARK, MERGED_MARKER])
+    assert result == "proposed in Meru/echo"  # no Write given: Xolotl kept it, and Shikigami isn't admin to give it
+    assert opened["pr"]["files"] == {
+        "deploy/meru.yaml": "owner: mario\nchart: nuwa-app-0.7.0\nbuild: true\n",
+        "deploy/meru.yaml.in": None,
+        "deploy/values.yaml": "name: echo\nowner: mario\n",
+    }
+
+
+async def test_a_merged_marker_pr_newer_than_any_park_is_still_waited_on():
+    result, calls = await deploy(TEMPLATE, READY, pulls=[{**MERGED_MARKER, "number": 7}, MERGED_PARK])
+    assert result == "Meru/echo#7 merged, not on main yet"
+    assert [c for c in calls if "pr" in c] == []
 
 
 async def test_an_existing_marker_is_never_touched():
@@ -458,6 +506,19 @@ async def test_a_merged_stop_is_kept_and_the_park_is_the_next_pr(tmp_path: Path,
         "deploy/meru.yaml.in": 'owner: ""\nchart: nuwa-app-0.9.0\nbuild: true\n',
         "deploy/meru.yaml": None,
     }
+
+
+async def test_retired_again_after_a_restore_the_stop_is_proposed_again(tmp_path: Path, monkeypatch):
+    opened = opened_prs(monkeypatch)
+    pulls = {
+        "golem": [
+            {"number": 9, "title": "chore(deploy): golem is a Meru app", "state": "closed", "merged": True},
+            {"number": 4, "title": "chore(retire): stop golem", "state": "closed", "merged": True},
+        ]
+    }
+    activities, _ = retiring(tmp_path, {}, public=PUBLIC_GOLEM, pulls=pulls, admin=False)
+    assert await ActivityEnvironment().run(activities.retire_stop, "golem") == "proposed in Meru/golem"
+    assert [pr["title"] for pr in opened] == ["chore(retire): stop golem"]
 
 
 async def test_runner_records_and_archiving_are_left_to_charon_without_admin(tmp_path: Path):

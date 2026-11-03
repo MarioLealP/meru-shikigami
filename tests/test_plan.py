@@ -1,3 +1,5 @@
+import pytest
+
 from shikigami.models import ExistingApp
 from shikigami.plan import plan
 from shikigami.request_format import App
@@ -32,6 +34,14 @@ def test_requested_apps_carry_what_their_steps_need():
 def test_retired_apps_carry_no_template():
     (action,) = plan({}, {"old": existing("old")})
     assert action.template is None
+
+
+@pytest.mark.parametrize("status", ["decommissioning", "retained"])
+def test_a_retired_app_whose_request_is_back_is_restored(status: str):
+    (action,) = plan({"echo": app("echo")}, {"echo": existing("echo", status)})
+    assert (action.kind, action.template) == ("restore", "nuwa/python")  # onboarding again (D106)
+    (action,) = plan({"echo": app("echo", removed=True)}, {"echo": existing("echo", status)})
+    assert action.kind == "retire"
 
 
 def test_changed_template_is_an_update():

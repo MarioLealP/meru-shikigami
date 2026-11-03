@@ -161,7 +161,7 @@ async def test_retire_steps_are_told_to_thoth():
     ]
 
 
-@pytest.mark.parametrize("status", [403, 404, 409])
+@pytest.mark.parametrize("status", [403, 404, 409, 422])  # 422: a Thoth from before restores (D106)
 async def test_a_refused_retire_step_is_said_and_never_stops_the_pass(status: int):
     async def call(code: int) -> str:
         transport = httpx2.MockTransport(lambda request: httpx2.Response(code, json={"detail": "no"}))

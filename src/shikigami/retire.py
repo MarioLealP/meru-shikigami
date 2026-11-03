@@ -8,12 +8,14 @@ from shikigami.trust import BadLayout
 ENABLED = re.compile(r"^enabled: (?:true|false)\b.*$", re.MULTILINE)
 OWNER = re.compile(r"^owner: .*$", re.MULTILINE)
 BUILD = re.compile(r"^build: (?:true|false)\b.*$", re.MULTILINE)
+STOPPED_LINE = "enabled: false # retired (D85): no workload until Charon purges the namespace"
+STOPPED = re.compile(rf"^{re.escape(STOPPED_LINE)}\n?", re.MULTILINE)
 
 
 def stopped_values(values: str) -> str:
     """deploy/values.yaml with `enabled: false` (nuwa-app renders no workload) - set if the line exists, else added
     after the top-level owner line."""
-    line = "enabled: false # retired (D85): no workload until Charon purges the namespace"
+    line = STOPPED_LINE
     if ENABLED.search(values):
         return ENABLED.sub(line, values, count=1)
     owner = OWNER.search(values)
@@ -33,6 +35,12 @@ def is_stopped(values: str, marker: str) -> bool:
     return bool(re.search(r"^enabled: false\b", values, re.MULTILINE)) and bool(
         re.search(r"^build: false\b", marker, re.MULTILINE)
     )
+
+
+def restarted_values(values: str) -> str:
+    """deploy/values.yaml without the stop's `enabled: false` line (a restore, D106): nuwa-app's default is a workload.
+    Only the line the stop wrote - an owner's own `enabled:` stays theirs."""
+    return STOPPED.sub("", values, count=1)
 
 
 def parked(marker: str) -> str:

@@ -35,6 +35,13 @@ def test_values_without_an_owner_line_are_a_bad_layout():
         retire.stopped_values("name: golem\n")
 
 
+def test_a_restore_takes_out_only_the_stops_line():
+    values = "name: golem\nowner: mario\nenabled: false # own reason\n"
+    stopped = retire.stopped_values("name: golem\nowner: mario\n")
+    assert retire.restarted_values(stopped) == "name: golem\nowner: mario\n"
+    assert retire.restarted_values(values) == values  # the owner's own line stays theirs
+
+
 def test_parking_gives_back_what_onboarding_turns_into_a_marker():
     parked = retire.parked(retire.stopped_marker(with_owner(TEMPLATE_IN, "mario", "x")))
     assert yaml.safe_load(parked) == yaml.safe_load(TEMPLATE_IN)
