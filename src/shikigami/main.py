@@ -63,6 +63,8 @@ async def run() -> None:
                 activities.retire_trust,
                 activities.retire_runner,
                 activities.retire_archive,
+                activities.retire_mark_namespaces,
+                activities.restore_unmark_namespaces,
                 activities.retire_mark,
                 activities.dry_run,
                 build.ensure_build_keys,

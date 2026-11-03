@@ -30,6 +30,7 @@ def plan(apps: dict[str, App], existing: dict[str, ExistingApp]) -> list[AppActi
                 description=spec.description,
                 owner=spec.owner,
                 secrets=[secret.name for secret in spec.secrets],
+                removed_at=apps[name].metadata.removedAt,
             )
         )
     for name in sorted(set(existing) - set(apps)):

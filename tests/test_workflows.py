@@ -1,5 +1,6 @@
 import uuid
 from contextlib import suppress
+from datetime import UTC, datetime
 
 import pytest
 from temporalio import activity
@@ -123,9 +124,21 @@ def activities(
         log.append(f"retire_mark {app} {status}")
         return status
 
+    @activity.defn(name="retire_mark_namespaces")
+    async def retire_mark_namespaces(app: str, removed_at: datetime | None) -> list[str]:
+        log.append(f"retire_mark_namespaces {app} {removed_at.isoformat() if removed_at else None}")
+        return [app]
+
+    @activity.defn(name="restore_unmark_namespaces")
+    async def restore_unmark_namespaces(app: str) -> list[str]:
+        log.append(f"restore_unmark_namespaces {app}")
+        return [app]
+
     return [
         *retire_steps,
         retire_mark,
+        retire_mark_namespaces,
+        restore_unmark_namespaces,
         read_requests,
         read_existing_apps,
         declare_apps,
@@ -264,9 +277,10 @@ async def test_requests_with_problems_declare_nothing(env: WorkflowEnvironment):
 
 
 async def test_a_removed_request_retires_in_order_and_onboards_nothing(env: WorkflowEnvironment):
+    removed_at = datetime(2026, 11, 3, 12, 31, 18, tzinfo=UTC)
     golem = ECHO.model_copy(
         update={
-            "metadata": ECHO.metadata.model_copy(update={"name": "golem"}),
+            "metadata": ECHO.metadata.model_copy(update={"name": "golem", "removedAt": removed_at}),
             "spec": ECHO.spec.model_copy(update={"removed": True}),
         }
     )
@@ -282,6 +296,7 @@ async def test_a_removed_request_retires_in_order_and_onboards_nothing(env: Work
         "retire_runner golem",
         "revoke_zot_login golem",
         "retire_archive golem",  # nothing is written to the repo after this
+        "retire_mark_namespaces golem 2026-11-03T12:31:18+00:00",  # the request's removedAt: Charon's key (D107)
         "retire_mark golem retained",  # every step done: stopped, revoked, data kept until Charon
     ]
     assert done == []  # no dry run: the pass is real
@@ -314,7 +329,11 @@ async def test_a_retained_app_whose_request_is_back_is_marked_planned_then_onboa
     retained = ExistingApp(key="echo", status="retained", template="nuwa/python")
     result, done = await run_sync(env.client, snapshot, {"echo": retained}, log)
     assert [(a.app, a.kind) for a in result] == [("echo", "restore")]
-    steps = [line for line in log if line.startswith(("ensure_", "retire_", "lock_out"))]
-    assert steps[:2] == ["retire_mark echo planned", "ensure_repo echo nuwa/python"]  # Thoth first (D106)
+    steps = [line for line in log if line.startswith(("ensure_", "retire_", "restore_", "lock_out"))]
+    assert steps[:3] == [
+        "retire_mark echo planned",  # Thoth first (D106)
+        "restore_unmark_namespaces echo",  # then the removed-at mark off: Charon must not purge it
+        "ensure_repo echo nuwa/python",
+    ]
     assert "ensure_deploy_files echo mario" in steps and not any(s.startswith("retire_stop") for s in steps)
     assert [a.kind for a in done] == ["restore"]  # the closing dry-run line, as for any onboarding pass

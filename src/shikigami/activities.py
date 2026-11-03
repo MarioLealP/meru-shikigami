@@ -3,6 +3,7 @@ run twice."""
 
 import secrets
 from collections.abc import Awaitable, Callable, Mapping
+from datetime import datetime
 
 import httpx2
 from temporalio import activity
@@ -13,6 +14,7 @@ from shikigami import marker, retire, trust
 from shikigami.argo import application, not_stopped
 from shikigami.config import Settings
 from shikigami.models import AppAction, ExistingApp, RequestsSnapshot
+from shikigami.namespaces import set_removed_at, stamp
 from shikigami.openbao import KV
 from shikigami.proposals import Edit, ProposalFailed, find_pr, open_pr
 from shikigami.repos import (
@@ -424,6 +426,32 @@ class Activities:
         """Thoth's side of the pass (D85): decommissioning at its start, retained at its end."""
         token = await self._thoth_tokens.get()
         return await mark_retire_step(self._http, self._settings.thoth_url, token, app, status)
+
+    async def _set_removed_at(self, app: str, value: str | None) -> list[str]:
+        """The app's two namespaces, `<app>` and `<app>-build`; returns the ones that exist (and were set)."""
+        s = self._settings
+        if self._kube is None:
+            raise ApplicationError("no Kubernetes API client (kubernetesApi off?)", non_retryable=True)
+        token = s.kubernetes_dir / "token"
+        return [
+            ns for ns in (app, f"{app}-build") if await set_removed_at(self._kube, s.kubernetes_url, token, ns, value)
+        ]
+
+    @activity.defn
+    async def retire_mark_namespaces(self, app: str, removed_at: datetime | None) -> list[str]:
+        """Charon step 1 (D107): the request's removedAt onto the app's namespaces - Charon deletes only marked ones,
+        after its own 30 days. Last before Thoth hears retained: a marked namespace is a fully retired app's."""
+        if removed_at is None:
+            raise ApplicationError(
+                f"{app}'s request has no removedAt - Xolotl stamps it on the removal merge", non_retryable=True
+            )
+        return await self._set_removed_at(app, stamp(removed_at))
+
+    @activity.defn
+    async def restore_unmark_namespaces(self, app: str) -> list[str]:
+        """A restore (D106): the mark comes off first, so Charon never deletes a restored app's namespaces. Argo
+        doesn't remove an annotation it didn't write - this does."""
+        return await self._set_removed_at(app, None)
 
     @activity.defn
     async def retire_archive(self, app: str) -> bool:
