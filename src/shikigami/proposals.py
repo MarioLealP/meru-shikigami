@@ -38,10 +38,6 @@ class Edit(BaseModel):
     after: str | None
 
 
-class _Ref(Incoming):
-    sha: str
-
-
 class Pull(Incoming):
     """A PR as Gitea lists it - the fields the trust steps look at."""
 
@@ -50,7 +46,8 @@ class Pull(Incoming):
     state: str  # open | closed
     merged: bool = False
     mergeable: bool = True  # Gitea's own conflict check; false for a moment after any push, while it checks
-    base: _Ref | None = None  # the main commit the PR was built on
+    # The main commit the PR was built on. Not base.sha: Gitea keeps that at main's current tip.
+    merge_base: str | None = None
 
 
 _PULLS = TypeAdapter(list[Pull])
