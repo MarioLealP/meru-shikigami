@@ -270,10 +270,10 @@ class Activities:
         """Gitea says it can't merge and main has moved past the commit it was built on. Gitea's flag alone isn't
         enough: it reads false for a moment after every push while Gitea checks - a fresh PR, built on today's main,
         is never rebuilt."""
-        if pr.mergeable or pr.base is None:
+        if pr.mergeable or pr.merge_base is None:
             return False
         s = self._settings
-        return pr.base.sha != await head(self._http, s.gitea_url, None, s.apps_org, repo)
+        return pr.merge_base != await head(self._http, s.gitea_url, None, s.apps_org, repo)
 
     # The retire pass (D85), in this order, each step keeping what's done: stop -> wait for Argo -> park the marker ->
     # removal PRs -> revoke runner (+ the Zot login, BuildActivities) -> archive. Deletes nothing: Charon purges later.

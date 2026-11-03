@@ -374,7 +374,8 @@ MAIN_NOW = {"meru/branches/main": '{"name": "main", "commit": {"id": "main-now"}
 
 
 async def test_an_open_pr_that_conflicts_with_a_newer_main_is_rebuilt_in_place(monkeypatch: pytest.MonkeyPatch):
-    pulls = fence_pr(mergeable=False, base={"sha": "main-before"})  # another app's fence merged first
+    # another app's fence merged first; base.sha is main's tip, as Gitea reports it - merge_base is where it was built
+    pulls = fence_pr(mergeable=False, base={"sha": "main-now"}, merge_base="main-before")
     result, opened = await onboard_trust(monkeypatch, {**TRUST_REPOS, **MAIN_NOW}, pulls)
     assert result.startswith("fence re-proposed in Meru/meru#47 (it conflicted with main)")
     fence = next(pr for pr in opened if pr["title"] == "chore(trust): onboard golem - fence")
@@ -386,9 +387,9 @@ async def test_an_open_pr_that_conflicts_with_a_newer_main_is_rebuilt_in_place(m
 @pytest.mark.parametrize(
     "pr",
     [
-        {"mergeable": True, "base": {"sha": "main-before"}},  # behind main but merges cleanly: Gitea handles it
-        {"mergeable": False, "base": {"sha": "main-now"}},  # just pushed: Gitea still checking, not a conflict
-        {"mergeable": False},  # no base reported: never guess
+        {"mergeable": True, "merge_base": "main-before"},  # behind main but merges cleanly: Gitea handles it
+        {"mergeable": False, "merge_base": "main-now"},  # just pushed: Gitea still checking, not a conflict
+        {"mergeable": False},  # no merge base reported: never guess
     ],
 )
 async def test_an_open_pr_is_left_alone_unless_it_conflicts_with_a_newer_main(monkeypatch: pytest.MonkeyPatch, pr):
