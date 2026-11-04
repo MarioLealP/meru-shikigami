@@ -1,5 +1,7 @@
-"""`shikigami-run`: one process per pod - the Temporal worker and the HTTP side, side by side (D75). Replicas are
-identical; Temporal hands each task to one of them."""
+"""`shikigami-run`: one process per pod - the Temporal worker and the HTTP side, side by side (D75).
+
+Replicas are identical; Temporal hands each task to one of them.
+"""
 
 import asyncio
 import logging
@@ -20,6 +22,7 @@ from shikigami.workflows import AppWorkflow, FirstBuild, OnboardBuild, RequestsS
 
 
 async def run() -> None:
+    """Connect everything, then run the Temporal worker and the HTTP server until one of them stops."""
     settings = Settings()  # the secrets come from the environment
     tls = ssl.create_default_context(cafile=settings.openbao_dir / "ca.crt")
     cluster = ssl.create_default_context(cafile=settings.kubernetes_dir / "ca.crt")
@@ -30,20 +33,29 @@ async def run() -> None:
     ):
 
         def tokens(client_id: str) -> TokenSource:
-            return TokenSource(http, settings.token_url, client_id, settings.authentik_token_file)
+            return TokenSource(
+                http=http,
+                token_url=settings.token_url,
+                client_id=client_id,
+                token_file=settings.authentik_token_file,
+            )
 
         temporal_tokens = tokens(settings.temporal_client_id)
         client = await connect(settings, temporal_tokens)
         await ensure_nightly(client, settings)
-        activities = Activities(settings, http, tokens(settings.thoth_client_id), kube)
-        login = KubernetesLogin(bao, settings.openbao_addr, settings.openbao_role, settings.openbao_dir / "token")
-        kv = KV(bao, settings.openbao_addr, "apps", login.get)
+        activities = Activities(settings=settings, http=http, thoth_tokens=tokens(settings.thoth_client_id), kube=kube)
+        login = KubernetesLogin(
+            http=bao, addr=settings.openbao_addr, role=settings.openbao_role, jwt_file=settings.openbao_dir / "token"
+        )
+        kv = KV(http=bao, addr=settings.openbao_addr, mount="apps", token=login.get)
 
         async def app_runner_token(app: str) -> str:
             gitea_token = settings.gitea_token.get_secret_value()
             return await runner_token(http, settings.gitea_url, gitea_token, settings.apps_org, app)
 
-        build = BuildActivities(kv, settings.zot_registry, settings.cosign, app_runner_token)
+        build = BuildActivities(
+            kv=kv, registry=settings.zot_registry, cosign=settings.cosign, runner_token=app_runner_token
+        )
         worker = Worker(
             client,
             task_queue=settings.task_queue,
@@ -84,6 +96,7 @@ async def run() -> None:
 
 
 def main() -> None:
+    """The `shikigami-run` command."""
     # Temporal's worker, workflow and activity loggers (the dry run's "would ..." lines) log through the root logger.
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
     asyncio.run(run())

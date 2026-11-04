@@ -5,7 +5,7 @@ from pathlib import Path
 import httpx2
 import pytest
 
-from shikigami.proposals import AUTHOR, MainMoved, ProposalFailed, find_pr, open_pr
+from shikigami.proposals import AUTHOR, MainMovedError, ProposalFailedError, find_pr, open_pr
 
 # Like Gitea for a reader (routers/private/serv.go): only refs/for/* pushes get in; anything else is refused.
 HOOK = """#!/bin/sh
@@ -57,7 +57,7 @@ async def test_a_proposal_is_one_commit_pushed_to_refs_for_main_with_its_options
     )
     options = (remote / "push-options").read_text().splitlines()
     assert options[:2] == ["topic=onboard-golem", "title=chore(trust): onboard golem - fence"]
-    assert options[2] == "description={base64}" + base64.b64encode(b"line one\nline two").decode()
+    assert options[2] == f"description={{base64}}{base64.b64encode(b'line one\nline two').decode()}"
     commit = git(remote, "rev-parse", "refs/for/main").strip()
     assert (
         git(remote, "log", "-1", "--format=%an <%ae>|%s", commit).strip()
@@ -102,7 +102,7 @@ async def test_none_deletes_a_file_in_the_proposal(remote: Path):
 
 async def test_a_refused_push_says_why(remote: Path):
     (remote / "hooks" / "pre-receive").write_text("#!/bin/sh\necho 'User permission denied for writing.' >&2\nexit 1\n")
-    with pytest.raises(ProposalFailed, match="permission denied"):
+    with pytest.raises(ProposalFailedError, match="permission denied"):
         await open_pr(f"file://{remote}", "shikigami", "tok", "t", "title", "d", {"a.yaml": "a: 1\n"}, {"a.yaml": None})
 
 
@@ -115,7 +115,7 @@ async def test_a_refused_push_says_why(remote: Path):
 )
 async def test_a_file_that_moved_on_main_since_it_was_read_is_never_pushed(remote: Path, read: dict, why: str):
     """Meru/zot#21: a change worked out from an older main would undo whatever merged in between."""
-    with pytest.raises(MainMoved, match=why):
+    with pytest.raises(MainMovedError, match=why):
         await open_pr(f"file://{remote}", "shikigami", "tok", "t", "title", "d", {"kustomization.yaml": "x\n"}, read)
     assert not (remote / "push-options").exists()  # nothing reached Gitea
     assert git(remote, "for-each-ref", "refs/for").strip() == ""
@@ -139,5 +139,6 @@ async def test_find_pr_matches_the_exact_title_open_or_closed():
 
     http = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
     found = await find_pr(http, "https://git.test", "Meru", "meru", ["chore(trust): onboard golem - fence"])
-    assert found is not None and found.number == 7
+    assert found is not None
+    assert found.number == 7
     assert await find_pr(http, "https://git.test", "Meru", "meru", ["chore(trust): onboard other - fence"]) is None

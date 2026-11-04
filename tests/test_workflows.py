@@ -25,19 +25,12 @@ ECHO = App.model_validate(
 )
 
 
-def activities(
+def sync_activities(
     snapshot: RequestsSnapshot,
     existing: dict[str, ExistingApp],
     done: list[AppAction],
-    log: list[str] | None = None,
-    deploy: str = "kept",
-    first_build: str | None = "passed (attempt 1)",
-    retire: dict[str, object] | None = None,
+    log: list[str],
 ):
-    """`first_build`: what the first_build activity answers; None = it never settles (fails for good). `retire`:
-    answers for retire steps, by activity name, over the defaults."""
-    log = [] if log is None else log
-
     @activity.defn(name="read_requests")
     async def read_requests() -> RequestsSnapshot:
         log.append("read_requests")
@@ -62,6 +55,10 @@ def activities(
     async def dry_run(action: AppAction) -> None:
         done.append(action)
 
+    return [read_requests, read_existing_apps, declare_apps, ensure_repo, dry_run]
+
+
+def onboard_activities(log: list[str], deploy: str, first_build: str | None):
     @activity.defn(name="ensure_deploy_files")
     async def ensure_deploy_files(app: str, owner: str, public_key: str, secrets: list[str]) -> str:
         log.append(f"ensure_deploy_files {app} {owner}")
@@ -99,6 +96,18 @@ def activities(
         log.append(f"ensure_runner_registration {app}")
         return False
 
+    return [
+        ensure_trust,
+        ensure_deploy_files,
+        first_build_step,
+        lock_out,
+        ensure_build_keys,
+        ensure_zot_login,
+        ensure_runner_registration,
+    ]
+
+
+def retire_activities(log: list[str], retire: dict[str, object] | None):
     def retire_step(name: str, result):
         @activity.defn(name=name)
         async def step(app: str):
@@ -134,23 +143,25 @@ def activities(
         log.append(f"restore_unmark_namespaces {app}")
         return [app]
 
+    return [*retire_steps, retire_mark, retire_mark_namespaces, restore_unmark_namespaces]
+
+
+def activities(
+    snapshot: RequestsSnapshot,
+    existing: dict[str, ExistingApp],
+    done: list[AppAction],
+    log: list[str] | None = None,
+    deploy: str = "kept",
+    first_build: str | None = "passed (attempt 1)",
+    retire: dict[str, object] | None = None,
+):
+    """`first_build`: what the first_build activity answers; None = it never settles (fails for good). `retire`:
+    answers for retire steps, by activity name, over the defaults."""
+    log = [] if log is None else log
     return [
-        *retire_steps,
-        retire_mark,
-        retire_mark_namespaces,
-        restore_unmark_namespaces,
-        read_requests,
-        read_existing_apps,
-        declare_apps,
-        ensure_repo,
-        ensure_trust,
-        ensure_deploy_files,
-        first_build_step,
-        lock_out,
-        dry_run,
-        ensure_build_keys,
-        ensure_zot_login,
-        ensure_runner_registration,
+        *retire_activities(log, retire),
+        *sync_activities(snapshot, existing, done, log),
+        *onboard_activities(log, deploy, first_build),
     ]
 
 
@@ -280,7 +291,7 @@ async def test_a_removed_request_retires_in_order_and_onboards_nothing(env: Work
     removed_at = datetime(2026, 11, 3, 12, 31, 18, tzinfo=UTC)
     golem = ECHO.model_copy(
         update={
-            "metadata": ECHO.metadata.model_copy(update={"name": "golem", "removedAt": removed_at}),
+            "metadata": ECHO.metadata.model_copy(update={"name": "golem", "removed_at": removed_at}),
             "spec": ECHO.spec.model_copy(update={"removed": True}),
         }
     )
@@ -335,5 +346,6 @@ async def test_a_retained_app_whose_request_is_back_is_marked_planned_then_onboa
         "restore_unmark_namespaces echo",  # then the removed-at mark off: Charon must not purge it
         "ensure_repo echo nuwa/python",
     ]
-    assert "ensure_deploy_files echo mario" in steps and not any(s.startswith("retire_stop") for s in steps)
+    assert "ensure_deploy_files echo mario" in steps
+    assert not any(s.startswith("retire_stop") for s in steps)
     assert [a.kind for a in done] == ["restore"]  # the closing dry-run line, as for any onboarding pass

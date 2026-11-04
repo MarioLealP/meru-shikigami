@@ -1,7 +1,11 @@
+import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
+from temporalio.contrib.pydantic import pydantic_data_converter
 
+from shikigami.request_format import App
 from shikigami.schema import schemas
 from shikigami.validate import check
 
@@ -97,3 +101,45 @@ def test_schema_files_match_the_models() -> None:
     schema_dir = Path(__file__).parent.parent / "schema"
     for name, text in schemas().items():
         assert (schema_dir / name).read_text() == text, f"schema/{name} is stale - run shikigami-schema"
+
+
+FULL_APP = {
+    "apiVersion": "meru.clockmost.com/v1",
+    "kind": "App",
+    "metadata": {"name": "echo", "approvedBy": "a", "removedBy": "b", "removedAt": "2026-11-03T12:31:18Z"},
+    "spec": {
+        "owner": "mario",
+        "description": "Placeholder app",
+        "removed": True,
+        "storage": [{"name": "data", "size": "1Gi", "class": "ssd", "mountPath": "/data"}],
+    },
+}
+
+
+def test_temporal_payloads_keep_the_request_files_names():
+    app = App.model_validate(FULL_APP)
+    payload = pydantic_data_converter.payload_converter.to_payloads([app])
+    sent = json.loads(payload[0].data)
+    assert sent["apiVersion"] == "meru.clockmost.com/v1"
+    assert {"approvedBy", "removedBy", "removedAt"} <= set(sent["metadata"])
+    assert {"class", "mountPath"} <= set(sent["spec"]["storage"][0])
+    assert pydantic_data_converter.payload_converter.from_payloads(payload, [App]) == [app]
+
+
+@pytest.mark.parametrize(
+    "request_file",
+    [
+        {k.replace("apiVersion", "api_version"): v for k, v in FULL_APP.items()},
+        {**FULL_APP, "metadata": {"name": "echo", "removed_at": "2026-11-03T12:31:18Z"}},
+        {
+            **FULL_APP,
+            "spec": {
+                **FULL_APP["spec"],
+                "storage": [{"name": "d", "size": "1Gi", "class": "ssd", "mount_path": "/d"}],
+            },
+        },
+    ],
+)
+def test_a_request_file_cant_use_the_python_names(request_file: dict):
+    with pytest.raises(ValidationError):
+        App.model_validate(request_file)

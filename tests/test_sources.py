@@ -140,7 +140,8 @@ async def test_problems_main_already_has_are_not_blamed_on_the_proposal():
 
 async def test_not_yaml_is_a_problem_not_a_crash():
     verdict = await check({"apps/echo.yaml": ECHO}, "apps/golem.yaml", "spec: [unclosed")
-    assert len(verdict.problems) == 1 and verdict.problems[0].startswith("apps/golem.yaml: not YAML")
+    assert len(verdict.problems) == 1
+    assert verdict.problems[0].startswith("apps/golem.yaml: not YAML")
 
 
 async def test_retire_steps_are_told_to_thoth():

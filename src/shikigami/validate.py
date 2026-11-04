@@ -9,7 +9,7 @@ from collections import Counter
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from shikigami.request_format import App, Database
 
@@ -36,14 +36,18 @@ def _load(path: Path, model: type[App] | type[Database], problems: list[str]) ->
 class Loaded(BaseModel):
     """Every request in a checkout, and what's wrong with it - nothing acts on a checkout with problems."""
 
+    model_config = ConfigDict(frozen=True)
+
     apps: dict[str, App] = Field(default_factory=dict)
     databases: dict[str, Database] = Field(default_factory=dict)
     problems: list[str] = Field(default_factory=list)
 
 
 def load(repo: Path) -> Loaded:
-    loaded = Loaded()
-    problems, apps, databases = loaded.problems, loaded.apps, loaded.databases
+    """Every request in the checkout at `repo`, with the problems found in and across the files."""
+    problems: list[str] = []
+    apps: dict[str, App] = {}
+    databases: dict[str, Database] = {}
 
     for path in sorted(p for p in repo.rglob("*") if p.is_file() and ".git" not in p.relative_to(repo).parts[:1]):
         rel = path.relative_to(repo)
@@ -59,6 +63,12 @@ def load(repo: Path) -> Loaded:
             continue
         problems.append(f"{rel}: not a request - only apps/<name>.yaml and databases/<name>.yaml belong here")
 
+    return Loaded(apps=apps, databases=databases, problems=problems + _across_files(apps, databases))
+
+
+def _across_files(apps: dict[str, App], databases: dict[str, Database]) -> list[str]:
+    """What's wrong between the requests, each file being fine on its own."""
+    problems: list[str] = []
     for name, db in databases.items():
         if db.spec.app not in apps:
             problems.append(f"databases/{name}.yaml: spec.app {db.spec.app!r} has no apps/{db.spec.app}.yaml")
@@ -70,14 +80,16 @@ def load(repo: Path) -> Loaded:
             problems.append(f"apps/{app}.yaml: {count} databases name it as spec.app - one database per app")
     hosts = Counter(a.spec.route.host or f"{a.metadata.name}.clockmost.com" for a in apps.values())
     problems += [f"route.host {host} is used by {n} apps" for host, n in hosts.items() if n > 1]
-    return loaded
+    return problems
 
 
 def check(repo: Path) -> list[str]:
+    """The problems in the checkout at `repo`; none means it's valid."""
     return load(repo).problems
 
 
 def main() -> None:
+    """The `shikigami-validate` command."""
     repo = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
     problems = check(repo)
     for line in problems:

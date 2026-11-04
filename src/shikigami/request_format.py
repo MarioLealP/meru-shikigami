@@ -12,7 +12,7 @@ the shape, the workflow decides what is risky.
 from datetime import datetime
 from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 API_VERSION = "meru.clockmost.com/v1"
 
@@ -31,15 +31,23 @@ class _Model(BaseModel):
 
 
 class Metadata(_Model):
+    """Who the request is for, and who approved or removed it."""
+
     name: Name
-    approvedBy: str | None = Field(default=None, description="Written by Xolotl after an atlas approval.")
-    removedBy: str | None = Field(default=None, description="Written by Xolotl when a removal is approved.")
-    removedAt: datetime | None = Field(
-        default=None, description="Written by Xolotl with removedBy; the retention counts from here."
+    approved_by: str | None = Field(
+        default=None, alias="approvedBy", description="Written by Xolotl after an atlas approval."
+    )
+    removed_by: str | None = Field(
+        default=None, alias="removedBy", description="Written by Xolotl when a removal is approved."
+    )
+    removed_at: datetime | None = Field(
+        default=None, alias="removedAt", description="Written by Xolotl with removedBy; the retention counts from here."
     )
 
 
 class Route(_Model):
+    """How the app is reached from outside."""
+
     host: str | None = Field(
         default=None,
         pattern=r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?\.clockmost\.com$",
@@ -54,15 +62,18 @@ class Route(_Model):
 
 
 class Volume(_Model):
-    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+    """A persistent volume mounted into the app."""
 
     name: Name
     size: Quantity
-    storage_class: StorageClass = Field(alias="class")
-    mountPath: Annotated[str, StringConstraints(pattern=r"^/\S*$")]
+    # A file may say `class` or `storage_class`, and only `mountPath`: so no populate_by_name here.
+    storage_class: StorageClass = Field(
+        validation_alias=AliasChoices("class", "storage_class"), serialization_alias="class"
+    )
+    mount_path: Annotated[str, StringConstraints(pattern=r"^/\S*$")] = Field(alias="mountPath")
 
 
-class Exception_(_Model):
+class KyvernoException(_Model):
     """A Kyverno exception for this app's pods. Always needs approval."""
 
     kind: Literal["runAsRoot", "privileged", "hostNetwork", "hostPath"]
@@ -70,14 +81,19 @@ class Exception_(_Model):
 
 
 class Secret(_Model):
-    """One environment variable from OpenBao (D99): `discord-token` -> DISCORD_TOKEN. Only the name lives here; Janus
-    writes the value to OpenBao (apps/meru/<app>/eso/env) when the app is requested - typed in, or made by Janus."""
+    """One environment variable from OpenBao (D99): `discord-token` -> DISCORD_TOKEN.
+
+    Only the name lives here; Janus writes the value to OpenBao (apps/meru/<app>/eso/env) when the app is requested -
+    typed in, or made by Janus.
+    """
 
     name: Name
     generate: bool = Field(default=False, description="true: Janus makes the value (secrets.token_urlsafe(32)).")
 
 
 class AppSpec(_Model):
+    """What an app asks for."""
+
     owner: Owner
     description: Annotated[str, StringConstraints(min_length=3, max_length=120, pattern=r"^[^\n]*$")]
     template: str = Field(
@@ -93,7 +109,7 @@ class AppSpec(_Model):
     replicas: Annotated[int, Field(ge=1, le=3)] = 1
     port: Annotated[int, Field(ge=1024, le=65535)] = 8080
     heartbeat: Annotated[str, StringConstraints(pattern=r"^/\S*$")] = "/heartbeat"
-    exceptions: list[Exception_] = []
+    exceptions: list[KyvernoException] = []
     retention: Days = "30d"
     removed: bool = Field(
         default=False, description="true = retire (D83): stopped and revoked now, purged after the retention."
@@ -114,12 +130,14 @@ class AppSpec(_Model):
 
 
 def _removal_recorded_only_when_removed(metadata: Metadata, removed: bool) -> None:
-    if not removed and (metadata.removedBy or metadata.removedAt):
+    if not removed and (metadata.removed_by or metadata.removed_at):
         raise ValueError("removedBy/removedAt only on a request with spec.removed: true")
 
 
 class App(_Model):
-    apiVersion: Literal["meru.clockmost.com/v1"]
+    """A request for an app: apps/<name>.yaml."""
+
+    api_version: Literal["meru.clockmost.com/v1"] = Field(alias="apiVersion")
     kind: Literal["App"]
     metadata: Metadata
     spec: AppSpec
@@ -131,6 +149,8 @@ class App(_Model):
 
 
 class DatabaseStorage(_Model):
+    """The disk a database gets."""
+
     model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
 
     size: Quantity
@@ -138,6 +158,8 @@ class DatabaseStorage(_Model):
 
 
 class DatabaseSpec(_Model):
+    """What a database asks for."""
+
     owner: Owner
     engine: Literal["postgres"] = "postgres"  # a CNPG Cluster
     size: Size = "small"
@@ -148,7 +170,9 @@ class DatabaseSpec(_Model):
 
 
 class Database(_Model):
-    apiVersion: Literal["meru.clockmost.com/v1"]
+    """A request for a database: databases/<name>.yaml."""
+
+    api_version: Literal["meru.clockmost.com/v1"] = Field(alias="apiVersion")
     kind: Literal["Database"]
     metadata: Metadata
     spec: DatabaseSpec

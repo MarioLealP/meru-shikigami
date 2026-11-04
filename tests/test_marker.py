@@ -1,6 +1,6 @@
 import pytest
 
-from shikigami.marker import BadTemplate, key_trusted, owner_unset, with_owner
+from shikigami.marker import BadTemplateError, key_trusted, owner_unset, with_owner
 
 TEMPLATE = '# comment about owner: "" stays\nowner: ""\nchart: nuwa-app-0.7.0\n'
 KEY = "-----BEGIN PUBLIC KEY-----\nAAAA\nBBBB\n-----END PUBLIC KEY-----\n"
@@ -26,7 +26,7 @@ def test_keeps_a_trailing_comment_out():
 
 @pytest.mark.parametrize("text", ["owner: mario\n", 'owner: ""\nowner: ""\n', "chart: x\n"])
 def test_refuses_a_file_without_exactly_one_empty_owner(text: str):
-    with pytest.raises(BadTemplate):
+    with pytest.raises(BadTemplateError):
         with_owner(text, "mario", "deploy/meru.yaml.in")
 
 
