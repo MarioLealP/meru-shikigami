@@ -1,5 +1,8 @@
-"""Temporal workflows (D65, D75). Workflow code is replayed from history after a restart, so it must stay
-deterministic: no I/O, clock or randomness here - that all lives in the activities."""
+"""Temporal workflows (D65, D75).
+
+Workflow code is replayed from history after a restart, so it must stay deterministic: no I/O, clock or randomness here
+- that all lives in the activities.
+"""
 
 import asyncio
 from datetime import datetime, timedelta
@@ -31,14 +34,17 @@ def fingerprint(public_key: str) -> str:
 
 @workflow.defn
 class AppWorkflow:
-    """One app's pass, as a child of requests-sync, so many apps run side by side and fail apart (D75). Requested apps
-    walk their steps in order, each keeping what exists (D78): repo, build credentials (OnboardBuild, its own child),
-    then its fence + signing key, proposed as PRs (D82), then the deploy files (D81), then Shikigami locks itself out
-    of the repo (D89). A request marked removed runs the
-    retire pass (D85); an app with no request at all stays a dry run."""
+    """One app's pass, as a child of requests-sync, so many apps run side by side and fail apart (D75).
+
+    Requested apps walk their steps in order, each keeping what exists (D78): repo, build credentials (OnboardBuild, its
+    own child), then its fence + signing key, proposed as PRs (D82), then the deploy files (D81), then Shikigami locks
+    itself out of the repo (D89). A request marked removed runs the retire pass (D85); an app with no request at all
+    stays a dry run.
+    """
 
     @workflow.run
     async def run(self, action: AppAction) -> None:
+        """Run one app's steps; a retire pass replaces them, a restore goes first."""
         if action.kind == "restore":  # D106: Thoth first, then onboarding again - every step keeps what exists
             said = await workflow.execute_activity_method(
                 Activities.retire_mark, args=[action.app, "planned"], start_to_close_timeout=TIMEOUT, retry_policy=RETRY
@@ -86,7 +92,9 @@ class AppWorkflow:
 
     async def _first_build_then_lock_out(self, app: str) -> None:
         """Its own workflow, not awaited (D90): the wait can take an hour, and requests-sync waits for every app.
-        One id per app, so a later pass that finds it still watching leaves it be - and doesn't lock out early."""
+
+        One id per app, so a later pass that finds it still watching leaves it be - and doesn't lock out early.
+        """
         try:
             await workflow.start_child_workflow(
                 FirstBuild.run, app, id=f"first-build-{app}", parent_close_policy=ParentClosePolicy.ABANDON
@@ -95,9 +103,12 @@ class AppWorkflow:
             workflow.logger.info("app %s: first build still watched - lock-out follows it", app)
 
     async def _retire(self, app: str, removed_at: datetime | None) -> None:
-        """D85, in order: the stop must be applied before the Application goes - preserveResourcesOnDeletion would
-        leave running pods behind - and the trust goes once nothing uses it. The repo is archived last. Thoth hears
-        decommissioning at the start and retained once every step is done (only Anubis retires)."""
+        """D85, in order.
+
+        The stop must be applied before the Application goes - preserveResourcesOnDeletion would leave running pods
+        behind - and the trust goes once nothing uses it. The repo is archived last. Thoth hears decommissioning at the
+        start and retained once every step is done (only Anubis retires).
+        """
 
         async def step(method, retry_policy: RetryPolicy = RETRY):  # method: an activity method
             return await workflow.execute_activity_method(
@@ -139,10 +150,13 @@ class AppWorkflow:
 @workflow.defn
 class OnboardBuild:
     """An app's build credentials: build keys, then its Zot login (it reads the keys' entry), then its runner token.
-    Returns the cosign public key. Each step keeps what exists, so a re-run only fills gaps."""
+
+    Returns the cosign public key. Each step keeps what exists, so a re-run only fills gaps.
+    """
 
     @workflow.run
     async def run(self, app: str) -> str:
+        """Make whatever is missing; returns the cosign public key."""
         public_key = await workflow.execute_activity_method(
             BuildActivities.ensure_build_keys, app, start_to_close_timeout=TIMEOUT, retry_policy=RETRY
         )
@@ -157,11 +171,15 @@ class OnboardBuild:
 
 @workflow.defn
 class FirstBuild:
-    """D90: wait for the app's first build (re-running a failed one, up to first_build_reruns times), then lock out
-    (D89) whatever came of it - a build that never passes doesn't keep Shikigami admin. One hour at most."""
+    """D90: wait for the app's first build, then lock out (D89) whatever came of it.
+
+    A failed build is re-run up to first_build_reruns times; a build that never passes doesn't keep Shikigami admin. One
+    hour at most.
+    """
 
     @workflow.run
     async def run(self, app: str) -> str:
+        """Watch the first build, lock out, and say how both went."""
         try:
             build = await workflow.execute_activity_method(
                 Activities.first_build, app, start_to_close_timeout=TIMEOUT, retry_policy=FIRST_BUILD_POLL
@@ -179,17 +197,21 @@ class FirstBuild:
 @workflow.defn
 class RequestsSync:
     """Reads the requests and what exists, works out the difference and hands each app to its own child workflow.
-    A `poke` while running means "look again": the run makes one more pass before it ends."""
+
+    A `poke` while running means "look again": the run makes one more pass before it ends.
+    """
 
     def __init__(self) -> None:
         self._poked = False
 
     @workflow.signal
     def poke(self) -> None:
+        """Ask for one more pass after this one."""
         self._poked = True
 
     @workflow.run
     async def run(self) -> list[AppAction]:
+        """Sync until no poke arrived during a pass; returns the last pass's actions."""
         while True:
             self._poked = False
             snapshot = await workflow.execute_activity_method(

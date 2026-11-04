@@ -12,6 +12,7 @@ from shikigami.request_format import App, Database
 
 
 def schemas() -> dict[str, str]:
+    """Each request kind's JSON Schema text, by file name."""
     return {
         f"{model.__name__.lower()}.v1.json": json.dumps(model.model_json_schema(by_alias=True), indent=2) + "\n"
         for model in (App, Database)
@@ -19,6 +20,7 @@ def schemas() -> dict[str, str]:
 
 
 def main() -> None:
+    """The `shikigami-schema` command."""
     out = Path(sys.argv[1] if len(sys.argv) > 1 else "schema")
     out.mkdir(exist_ok=True)
     for name, text in schemas().items():

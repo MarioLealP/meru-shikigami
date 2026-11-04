@@ -30,6 +30,7 @@ NIGHTLY_ID = "requests-sync-nightly"
 
 
 async def connect(settings: Settings, tokens: TokenSource) -> Client:
+    """A Temporal client over mTLS with a bearer token, using the pydantic data converter."""
     tls = settings.tls_dir
     return await Client.connect(
         settings.temporal_address,
@@ -46,6 +47,7 @@ async def connect(settings: Settings, tokens: TokenSource) -> Client:
 
 
 async def keep_token_fresh(client: Client, tokens: TokenSource) -> None:
+    """Keep the client's token current for as long as the worker runs."""
     while True:
         await asyncio.sleep(REFRESH_EVERY)
         client.api_key = await tokens.get()

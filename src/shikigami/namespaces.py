@@ -1,8 +1,10 @@
-"""Marking a retired app's namespaces (Charon step 1, D107): the retire pass copies the request's removedAt (Xolotl's
-stamp) onto `<app>` and `<app>-build`, and a restore (D106) takes it off. Charon deletes only namespaces that carry
-it, after its own 30-day check - two keys. Meru/meru rbac/shikigami-marks-retired.yaml: get + patch namespaces,
-narrowed by an admission policy to this one annotation on Meru app namespaces. The pod's API token (nuwa-app
-kubernetesApi), re-read each call (the kubelet renews it)."""
+"""Marking a retired app's namespaces (Charon step 1, D107).
+
+The retire pass copies the request's removedAt (Xolotl's stamp) onto `<app>` and `<app>-build`, and a restore (D106)
+takes it off. Charon deletes only namespaces that carry it, after its own 30-day check - two keys. Meru/meru
+rbac/shikigami-marks-retired.yaml: get + patch namespaces, narrowed by an admission policy to this one annotation on
+Meru app namespaces. The pod's API token (nuwa-app kubernetesApi), re-read each call (the kubelet renews it).
+"""
 
 import json
 from datetime import UTC, datetime

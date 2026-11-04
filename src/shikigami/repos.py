@@ -1,5 +1,8 @@
-"""An app's repo (D76, D77): generated from its Nüwa template - a Gitea template repo - by the Shikigami bot, which
-Gitea makes admin of each repo it creates. Only the template's files: no webhooks, labels or protection copied."""
+"""An app's repo (D76, D77), generated from its Nüwa template by the Shikigami bot.
+
+The template is a Gitea template repo, and Gitea makes the bot admin of each repo it creates. Only the template's
+files: no webhooks, labels or protection copied.
+"""
 
 import base64
 
@@ -43,7 +46,7 @@ class _Repo(Incoming):
     permissions: _Permissions | None = None
 
 
-class NoTemplate(Exception):
+class NoTemplateError(Exception):
     """The request names a template that isn't a Nüwa template repo (yet)."""
 
 
@@ -51,7 +54,7 @@ def template_repo(template: str) -> str:
     """`nuwa/python` -> `nuwa-python`. Git URLs seed a repo differently (they need approval) - not handled here."""
     kind, _, name = template.partition("/")
     if kind != "nuwa" or not name:
-        raise NoTemplate(f"{template}: only nuwa/<name> templates make repos so far")
+        raise NoTemplateError(f"{template}: only nuwa/<name> templates make repos so far")
     return f"nuwa-{name}"
 
 
@@ -79,15 +82,17 @@ async def ensure_repo(
     if response.status_code == 409:  # already there: kept, whatever made it
         return False
     if response.status_code == 404:
-        raise NoTemplate(f"{template}: no template repo {org}/{source}")
+        raise NoTemplateError(f"{template}: no template repo {org}/{source}")
     response.raise_for_status()
     return True
 
 
 async def runner_token(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, app: str) -> str:
-    """The registration token the app's Sindri runner joins its repo with. Gitea asks for repo admin (our patched
-    build, D80; upstream wants owner) - Shikigami is admin of the repos it creates. Answers the repo's current token,
-    so asking again doesn't break a runner that already joined."""
+    """The registration token the app's Sindri runner joins its repo with.
+
+    Gitea asks for repo admin (our patched build, D80; upstream wants owner) - Shikigami is admin of the repos it
+    creates. Answers the repo's current token, so asking again doesn't break a runner that already joined.
+    """
     response = await http.post(
         f"{gitea_url}/api/v1/repos/{org}/{app}/actions/runners/registration-token",
         headers={"Authorization": f"token {token}"},
@@ -111,8 +116,10 @@ async def read_file(
 
 
 async def public_file(http: httpx2.AsyncClient, gitea_url: str, org: str, repo: str, path: str) -> str | None:
-    """A file from a public repo, read without credentials (the bot is restricted: it sees only repos it was added
-    to, the public ones included)."""
+    """A file from a public repo, read without credentials.
+
+    The bot is restricted: it sees only repos it was added to, the public ones included.
+    """
     response = await http.get(f"{gitea_url}/api/v1/repos/{org}/{repo}/raw/{path}")
     if response.status_code == 404:
         return None
@@ -139,8 +146,10 @@ async def commit_files(
     message: str,
     files: list[dict[str, str]],
 ) -> None:
-    """All the changes as one commit on the default branch. A stale sha fails the whole commit (Gitea answers 409/422),
-    so nothing half-written lands."""
+    """All the changes as one commit on the default branch.
+
+    A stale sha fails the whole commit (Gitea answers 409/422), so nothing half-written lands.
+    """
     response = await http.post(
         f"{gitea_url}/api/v1/repos/{org}/{repo}/contents",
         headers={"Authorization": f"token {token}"},
@@ -152,8 +161,10 @@ async def commit_files(
 async def run_workflow(
     http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str, workflow: str, ref: str = "main"
 ) -> None:
-    """Start a workflow by hand ("Run workflow", workflow_dispatch) - the app's first build: CI skips pushes that
-    only touch deploy/** (its own digest commits), and the marker commit is one."""
+    """Start a workflow by hand ("Run workflow", workflow_dispatch): the app's first build.
+
+    CI skips pushes that only touch deploy/** (its own digest commits), and the marker commit is one.
+    """
     response = await http.post(
         f"{gitea_url}/api/v1/repos/{org}/{repo}/actions/workflows/{workflow}/dispatches",
         headers={"Authorization": f"token {token}"},
@@ -175,8 +186,10 @@ async def head(
 
 
 async def delete_runners(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str) -> int:
-    """Remove every runner registered to the repo (retiring, D85; repo admin with our patched build, D80). Returns
-    how many went."""
+    """Remove every runner registered to the repo (retiring, D85; repo admin with our patched build, D80).
+
+    Returns how many went.
+    """
     base = f"{gitea_url}/api/v1/repos/{org}/{repo}/actions/runners"
     headers = {"Authorization": f"token {token}"}
     response = await http.get(base, headers=headers)
@@ -248,7 +261,9 @@ async def is_admin(http: httpx2.AsyncClient, gitea_url: str, token: str, org: st
 
 async def protect_main(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str) -> str:
     """Branch protection on main: pushes as before (CI's digest commits), force push off - an append-only history.
-    Says what it did: added, force push turned off on an existing rule, or kept."""
+
+    Says what it did: added, force push turned off on an existing rule, or kept.
+    """
     base, headers = f"{gitea_url}/api/v1/repos/{org}/{repo}/branch_protections", {"Authorization": f"token {token}"}
     response = await http.get(base, headers=headers)
     response.raise_for_status()
@@ -279,8 +294,11 @@ async def add_writer(http: httpx2.AsyncClient, gitea_url: str, token: str, org: 
 
 
 async def become_reader(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str, user: str) -> None:
-    """The bot drops itself to Read (cm-konk): no push, no settings - but it can still propose (AGit PRs, which Gitea
-    takes from a reader) and see the repo at all (a restricted bot sees only repos it's a collaborator of)."""
+    """The bot drops itself to Read (cm-konk).
+
+    No push, no settings - but it can still propose (AGit PRs, which Gitea takes from a reader) and see the repo at all
+    (a restricted bot sees only repos it's a collaborator of).
+    """
     response = await http.put(
         f"{gitea_url}/api/v1/repos/{org}/{repo}/collaborators/{user}",
         headers={"Authorization": f"token {token}"},

@@ -1,6 +1,8 @@
-"""An app's build credentials (D32, D66): the Zot push login its builds use and the cosign key that signs them. The
-shapes match what Sindri build jobs read (apps/meru/<app>-build/build, base64 fields) and what Zot reads (one
-htpasswd file, a line per app)."""
+"""An app's build credentials (D32, D66): the Zot push login its builds use and the cosign key that signs them.
+
+The shapes match what Sindri build jobs read (apps/meru/<app>-build/build, base64 fields) and what Zot reads (one
+htpasswd file, a line per app).
+"""
 
 import asyncio
 import base64
@@ -16,14 +18,17 @@ BUILD_FIELDS = ("zot_config_b64", "cosign_key_b64", "cosign_password_b64")
 
 
 def b64(text: str) -> str:
+    """Base64 of `text`, as OpenBao's entries hold values."""
     return base64.b64encode(text.encode()).decode()
 
 
 def unb64(text: str) -> str:
+    """The text back from `b64`."""
     return base64.b64decode(text).decode()
 
 
 def builder(app: str) -> str:
+    """The app's Zot user."""
     return f"{app}-builder"
 
 
@@ -33,13 +38,16 @@ def zot_config(registry: str, user: str, password: str) -> str:
 
 
 def zot_login(config: str, registry: str) -> tuple[str, str]:
+    """The (user, password) that `zot_config` put in for `registry`."""
     user, _, password = unb64(json.loads(config)["auths"][registry]["auth"]).partition(":")
     return user, password
 
 
 def htpasswd_with(text: str, user: str, password: str) -> str | None:
     """`text` with `user`'s line set to `password`, or None when the line already matches (nothing to write).
-    Every other line is kept as it is."""
+
+    Every other line is kept as it is.
+    """
     lines = text.splitlines()
     for line in lines:
         name, _, hashed = line.partition(":")

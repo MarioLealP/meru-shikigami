@@ -1,7 +1,9 @@
-"""`shikigami-bootstrap <app>`: runs OnboardBuild once with borrowed authority - for Shikigami's own build
-credentials, which it can't make for itself (nothing would let it in yet). Run on the server under an OpenBao admin
-session: a short-lived worker on its own queue, so it only ever picks up this run, which it starts and waits for.
-The run is a normal Temporal workflow, with its history in the UI like any other."""
+"""`shikigami-bootstrap <app>`: runs OnboardBuild once with borrowed authority.
+
+For Shikigami's own build credentials, which it can't make for itself (nothing would let it in yet). Run on the server
+under an OpenBao admin session: a short-lived worker on its own queue, so it only ever picks up this run, which it
+starts and waits for. The run is a normal Temporal workflow, with its history in the UI like any other.
+"""
 
 import argparse
 import asyncio
@@ -26,7 +28,7 @@ from shikigami.workflows import OnboardBuild
 class BootstrapSettings(BaseSettings):
     """What the admin session lends, from SHIKIGAMI_BOOTSTRAP_* variables (never arguments: those show in `ps`)."""
 
-    model_config = SettingsConfigDict(env_prefix="SHIKIGAMI_BOOTSTRAP_")
+    model_config = SettingsConfigDict(env_prefix="SHIKIGAMI_BOOTSTRAP_", frozen=True)
 
     openbao_addr: str = "https://openbao.clockmost.internal:8200"
     openbao_ca: Path = Path("/etc/openbao/ca.pem")
@@ -36,23 +38,32 @@ class BootstrapSettings(BaseSettings):
 
 
 async def run(app: str) -> str:
+    """Run OnboardBuild for `app` on a worker of its own; returns the cosign public key."""
     settings, boot = Settings(), BootstrapSettings()
     tls = ssl.create_default_context(cafile=boot.openbao_ca)
     async with httpx2.AsyncClient(timeout=30) as http, httpx2.AsyncClient(timeout=30, verify=tls) as bao:
-        tokens = TokenSource(http, settings.token_url, settings.temporal_client_id, settings.authentik_token_file)
+        tokens = TokenSource(
+            http=http,
+            token_url=settings.token_url,
+            client_id=settings.temporal_client_id,
+            token_file=settings.authentik_token_file,
+        )
         client = await connect(settings, tokens)
 
-        async def admin_token() -> str:  # the admin session's, fixed for the run
+        # KV and BuildActivities await their token callbacks, and a lent token has nothing to wait for.
+        async def admin_token() -> str:  # ruff: ignore[unused-async] - the admin session's, fixed for the run
             return boot.openbao_token.get_secret_value()
 
-        kv = KV(bao, boot.openbao_addr, "apps", admin_token)
+        kv = KV(http=bao, addr=boot.openbao_addr, mount="apps", token=admin_token)
 
-        async def runner_token(asked: str) -> str:
+        async def runner_token(asked: str) -> str:  # ruff: ignore[unused-async] - as admin_token
             if asked != app:  # the lent token is scoped to one repo
                 raise ApplicationError(f"the bootstrap only has a runner token for {app}", non_retryable=True)
             return boot.runner_token.get_secret_value()
 
-        activities = BuildActivities(kv, settings.zot_registry, settings.cosign, runner_token)
+        activities = BuildActivities(
+            kv=kv, registry=settings.zot_registry, cosign=settings.cosign, runner_token=runner_token
+        )
         async with Worker(
             client,
             task_queue=boot.task_queue,
@@ -69,6 +80,7 @@ async def run(app: str) -> str:
 
 
 def main() -> None:
+    """The `shikigami-bootstrap` command."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("app")
     args = parser.parse_args()

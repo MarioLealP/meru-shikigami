@@ -10,7 +10,7 @@ from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
 from shikigami import marker, trust
-from shikigami.activities import Activities
+from shikigami.activities import Activities, BuildActivities
 from shikigami.config import Settings
 from shikigami.models import RequestsSnapshot
 from shikigami.tokens import TokenSource
@@ -25,9 +25,11 @@ def activities(status: int) -> Activities:
         return httpx2.Response(status, json={"title": "Snapshot refused"})
 
     http = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
-    tokens = TokenSource(http, "https://auth.test/token/", "thoth", TOKEN_FILE)
+    tokens = TokenSource(http=http, token_url="https://auth.test/token/", client_id="thoth", token_file=TOKEN_FILE)
     return Activities(
-        Settings.model_construct(thoth_url="http://thoth.test", gitea_token=SecretStr("tok")), http, tokens
+        settings=Settings.model_construct(thoth_url="http://thoth.test", gitea_token=SecretStr("tok")),
+        http=http,
+        thoth_tokens=tokens,
     )
 
 
@@ -65,6 +67,37 @@ SIGNING_KEYS = "data:\n  echo: |\n    -----BEGIN PUBLIC KEY-----\n    AAAA\n    
 PUBLIC_KEY = "-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\n"
 
 
+def file_answer(name: str, files: dict[str, str]) -> httpx2.Response:
+    if name not in files:
+        return httpx2.Response(404, json={})
+    content = base64.b64encode(files[name].encode()).decode()
+    return httpx2.Response(200, json={"content": content, "sha": f"sha-{name}"})
+
+
+def contents_answer(request: httpx2.Request, files: dict[str, str], hidden: bool) -> httpx2.Response:
+    assert request.headers["authorization"] == "token tok"
+    if hidden:  # a repo the restricted bot wasn't added to
+        return httpx2.Response(403, json={})
+    return file_answer(request.url.path.removeprefix("/api/v1/repos/Meru/echo/contents/"), files)
+
+
+def raw_answer(request: httpx2.Request, public: dict[str, str]) -> httpx2.Response:
+    assert "authorization" not in request.headers  # public repos: read without the bot's token
+    name = request.url.path.removeprefix("/api/v1/repos/Meru/")
+    return httpx2.Response(200, text=public[name]) if name in public else httpx2.Response(404)
+
+
+def post_answer(request: httpx2.Request, commits: list[dict]) -> httpx2.Response:
+    path = request.url.path.removeprefix("/api/v1/repos/Meru/echo/")
+    if path == "contents":
+        commits.append(json.loads(request.content))
+        return httpx2.Response(201, json={})
+    if path == "actions/workflows/ci.yaml/dispatches":
+        commits.append({"dispatch": json.loads(request.content)})
+        return httpx2.Response(204)
+    return httpx2.Response(500)
+
+
 def gitea(
     files: dict[str, str],
     public: dict[str, str],
@@ -79,12 +112,8 @@ def gitea(
         path = request.url.path
         if request.method == "GET" and path == "/api/v1/repos/Meru/echo":
             return httpx2.Response(200, json={"permissions": {"admin": admin, "push": admin, "pull": True}})
-        if request.method == "POST" and path == "/api/v1/repos/Meru/echo/contents":
-            commits.append(json.loads(request.content))
-            return httpx2.Response(201, json={})
-        if request.method == "POST" and path == "/api/v1/repos/Meru/echo/actions/workflows/ci.yaml/dispatches":
-            commits.append({"dispatch": json.loads(request.content)})
-            return httpx2.Response(204)
+        if request.method == "POST" and path.startswith("/api/v1/repos/Meru/echo/"):
+            return post_answer(request, commits)
         if path == "/api/v1/users/xolotl":
             return httpx2.Response(200, json={"login": "xolotl"})
         if request.method == "PUT" and path == "/api/v1/repos/Meru/echo/collaborators/xolotl":
@@ -96,22 +125,13 @@ def gitea(
             commits.append({"ping": True})
             return httpx2.Response(202, json={})
         if path.startswith("/api/v1/repos/Meru/echo/contents/"):
-            assert request.headers["authorization"] == "token tok"
-            if hidden:  # a repo the restricted bot wasn't added to
-                return httpx2.Response(403, json={})
-            name = path.removeprefix("/api/v1/repos/Meru/echo/contents/")
-            if name not in files:
-                return httpx2.Response(404, json={})
-            content = base64.b64encode(files[name].encode()).decode()
-            return httpx2.Response(200, json={"content": content, "sha": f"sha-{name}"})
+            return contents_answer(request, files, hidden)
         if "/raw/" in path:
-            assert "authorization" not in request.headers  # public repos: read without the bot's token
-            name = path.removeprefix("/api/v1/repos/Meru/")
-            return httpx2.Response(200, text=public[name]) if name in public else httpx2.Response(404)
+            return raw_answer(request, public)
         return httpx2.Response(500)
 
     http = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
-    tokens = TokenSource(http, "https://auth.test/token/", "thoth", TOKEN_FILE)
+    tokens = TokenSource(http=http, token_url="https://auth.test/token/", client_id="thoth", token_file=TOKEN_FILE)
     settings = Settings.model_construct(
         gitea_url="https://git.test",
         gitea_token=SecretStr("tok"),
@@ -120,7 +140,7 @@ def gitea(
         merger_user="xolotl",
         merger_ping_url="http://xolotl.test/ping",
     )
-    return Activities(settings, http, tokens)
+    return Activities(settings=settings, http=http, thoth_tokens=tokens)
 
 
 READY = {"meru/raw/projects/echo.yaml": "kind: AppProject\n", "kyverno/raw/keys/meru-signing-keys.yaml": SIGNING_KEYS}
@@ -141,7 +161,7 @@ async def deploy(
         calls.append({"pr": {"remote": remote, "topic": topic, "title": title, "files": files, "read": read}})
 
     with pytest.MonkeyPatch.context() as m:
-        m.setattr("shikigami.activities.open_pr", fake_open_pr)
+        m.setattr("shikigami.activities.base.open_pr", fake_open_pr)
         result = await ActivityEnvironment().run(
             gitea(files, public, calls, hidden, admin, pulls).ensure_deploy_files, "echo", "mario", PUBLIC_KEY, secrets
         )
@@ -192,7 +212,8 @@ async def test_a_template_that_already_wires_secrets_is_not_retried():
     files = {**TEMPLATE, "deploy/values.yaml": VALUES + "secretEnv: {}\n"}
     with pytest.raises(ApplicationError) as raised:
         await deploy(files, READY, secrets=["api-key"])
-    assert raised.value.non_retryable and "secretEnv" in str(raised.value)
+    assert raised.value.non_retryable
+    assert "secretEnv" in str(raised.value)
 
 
 # What a retire leaves in a repo Shikigami already left (D89): the marker parked, the stop's line still in values.
@@ -241,7 +262,8 @@ async def test_a_marker_in_a_repo_the_bot_cant_see_still_counts():
 )
 async def test_waits_for_the_fence_and_the_key(public: dict[str, str], why: str):
     result, commits = await deploy({"deploy/meru.yaml.in": TEMPLATE_IN, "deploy/values.yaml": VALUES}, public)
-    assert result.startswith("waiting") and why in result
+    assert result.startswith("waiting")
+    assert why in result
     assert commits == []
 
 
@@ -290,7 +312,7 @@ async def onboard_trust(
             }
         )
 
-    monkeypatch.setattr("shikigami.activities.open_pr", fake_open_pr)
+    monkeypatch.setattr("shikigami.activities.base.open_pr", fake_open_pr)
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         if request.url.host == "xolotl.xolotl.svc":
@@ -302,12 +324,12 @@ async def onboard_trust(
         return httpx2.Response(200, text=public[path]) if path in public else httpx2.Response(404)
 
     http = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
-    tokens = TokenSource(http, "https://auth.test/token/", "thoth", TOKEN_FILE)
+    tokens = TokenSource(http=http, token_url="https://auth.test/token/", client_id="thoth", token_file=TOKEN_FILE)
     settings = Settings.model_construct(
         gitea_url="https://git.test", gitea_token=SecretStr("tok"), gitea_user="shikigami", apps_org="Meru"
     )
     result = await ActivityEnvironment().run(
-        Activities(settings, http, tokens).ensure_trust, app, "a test app.", key or GOLEM_KEY
+        Activities(settings=settings, http=http, thoth_tokens=tokens).ensure_trust, app, "a test app.", key or GOLEM_KEY
     )
     return result, opened
 
@@ -379,7 +401,8 @@ async def test_an_open_pr_that_conflicts_with_a_newer_main_is_rebuilt_in_place(m
     result, opened = await onboard_trust(monkeypatch, {**TRUST_REPOS, **MAIN_NOW}, pulls)
     assert result.startswith("fence re-proposed in Meru/meru#47 (it conflicted with main)")
     fence = next(pr for pr in opened if pr["title"] == "chore(trust): onboard golem - fence")
-    assert fence["force"] and fence["topic"] == "onboard-golem"  # the same AGit topic: the same PR, pushed again
+    assert fence["force"]
+    assert fence["topic"] == "onboard-golem"  # the same AGit topic: the same PR, pushed again
     assert "  - projects/golem.yaml\n" in fence["files"]["kustomization.yaml"]  # worked out against today's main
     assert PINGS == ["POST /ping"]  # Xolotl checks the new commit now
 
@@ -414,6 +437,25 @@ async def test_a_trust_repo_that_lost_its_layout_is_not_retried(monkeypatch: pyt
     assert raised.value.non_retryable
 
 
+def runner_answer(request: httpx2.Request, calls: list[dict]) -> httpx2.Response:
+    if request.url.path.endswith("/actions/runners"):
+        return httpx2.Response(200, json={"runners": [{"id": 7}], "total_count": 1})
+    if request.method == "DELETE" and request.url.path.endswith("/actions/runners/7"):
+        calls.append({"deleted runner": 7})
+        return httpx2.Response(204)
+    return httpx2.Response(500)
+
+
+def repo_answer(request: httpx2.Request, repo: dict, calls: list[dict]) -> httpx2.Response:
+    if request.method == "GET":
+        return httpx2.Response(200, json=repo)
+    if request.method == "PATCH":
+        repo.update(json.loads(request.content))
+        calls.append({"patched": json.loads(request.content)})
+        return httpx2.Response(200, json=repo)
+    return httpx2.Response(500)
+
+
 def retiring(
     kube_dir: Path,
     files: dict[str, str],
@@ -433,29 +475,17 @@ def retiring(
             calls.append(json.loads(request.content))
             return httpx2.Response(201, json={})
         if path.startswith("golem/contents/"):
-            name = path.removeprefix("golem/contents/")
-            if name not in files:
-                return httpx2.Response(404, json={})
-            return httpx2.Response(
-                200, json={"content": base64.b64encode(files[name].encode()).decode(), "sha": f"sha-{name}"}
-            )
+            return file_answer(path.removeprefix("golem/contents/"), files)
         if path == "golem/branches/main":
             return httpx2.Response(200, json={"commit": {"id": "c0ffee"}})
-        if path == "golem/actions/runners":
-            return httpx2.Response(200, json={"runners": [{"id": 7}], "total_count": 1})
-        if request.method == "DELETE" and path == "golem/actions/runners/7":
-            calls.append({"deleted runner": 7})
-            return httpx2.Response(204)
-        if path == "golem" and request.method == "GET":
-            return httpx2.Response(200, json=repo)
-        if path == "golem" and request.method == "PATCH":
-            repo.update(json.loads(request.content))
-            calls.append({"patched": json.loads(request.content)})
-            return httpx2.Response(200, json=repo)
+        if path.startswith("golem/actions/runners"):
+            return runner_answer(request, calls)
+        if path == "golem":
+            return repo_answer(request, repo, calls)
         if path.endswith("/pulls"):
             return httpx2.Response(200, json=(pulls or {}).get(path.split("/")[0], []))
         if "/raw/" in path:
-            return httpx2.Response(200, text=(public or {})[path]) if path in (public or {}) else httpx2.Response(404)
+            return raw_answer(request, public or {})
         return httpx2.Response(500)
 
     def kubernetes(request: httpx2.Request) -> httpx2.Response:
@@ -465,7 +495,7 @@ def retiring(
 
     http = httpx2.AsyncClient(transport=httpx2.MockTransport(gitea))
     kube = httpx2.AsyncClient(transport=httpx2.MockTransport(kubernetes))
-    tokens = TokenSource(http, "https://auth.test/token/", "thoth", TOKEN_FILE)
+    tokens = TokenSource(http=http, token_url="https://auth.test/token/", client_id="thoth", token_file=TOKEN_FILE)
     (kube_dir / "token").write_text("kube-token\n")  # the pod's API token (nuwa-app kubernetesApi)
     settings = Settings.model_construct(
         gitea_url="https://git.test",
@@ -476,7 +506,7 @@ def retiring(
         kubernetes_dir=kube_dir,
         argocd_namespace="argocd",
     )
-    return Activities(settings, http, tokens, kube), calls
+    return Activities(settings=settings, http=http, thoth_tokens=tokens, kube=kube), calls
 
 
 GOLEM_MARKER = "owner: mario\nchart: nuwa-app-0.9.0\nbuild: true\n"
@@ -488,7 +518,8 @@ async def test_the_stop_is_one_commit_and_kept_after(tmp_path: Path):
     assert await ActivityEnvironment().run(activities.retire_stop, "golem") == "written"
     (commit,) = calls
     texts = {f["path"]: base64.b64decode(f["content"]).decode() for f in commit["files"]}
-    assert "enabled: false" in texts["deploy/values.yaml"] and "build: false" in texts["deploy/meru.yaml"]
+    assert "enabled: false" in texts["deploy/values.yaml"]
+    assert "build: false" in texts["deploy/meru.yaml"]
     activities, calls = retiring(tmp_path, texts)
     assert await ActivityEnvironment().run(activities.retire_stop, "golem") == "kept"
     activities, calls = retiring(tmp_path, {"deploy/meru.yaml.in": GOLEM_MARKER, "deploy/values.yaml": GOLEM_VALUES})
@@ -510,7 +541,7 @@ def opened_prs(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     async def fake_open_pr(remote, user, token, topic, title, description, files, read, force=False):
         opened.append({"remote": remote, "topic": topic, "title": title, "files": files, "read": read, "force": force})
 
-    monkeypatch.setattr("shikigami.activities.open_pr", fake_open_pr)
+    monkeypatch.setattr("shikigami.activities.base.open_pr", fake_open_pr)
     return opened
 
 
@@ -527,7 +558,8 @@ async def test_a_repo_shikigami_stepped_down_from_gets_the_stop_as_a_pr(tmp_path
         "retire-stop-golem",
         "chore(retire): stop golem",
     )
-    assert "enabled: false" in pr["files"]["deploy/values.yaml"] and "build: false" in pr["files"]["deploy/meru.yaml"]
+    assert "enabled: false" in pr["files"]["deploy/values.yaml"]
+    assert "build: false" in pr["files"]["deploy/meru.yaml"]
     assert calls == []  # nothing committed straight to main
 
 
@@ -626,7 +658,7 @@ async def test_retiring_trust_proposes_three_removal_prs(tmp_path: Path, monkeyp
     async def fake_open_pr(remote, user, token, topic, title, description, files, read, force=False):
         opened.append({"topic": topic, "title": title, "files": files, "read": read, "description": description})
 
-    monkeypatch.setattr("shikigami.activities.open_pr", fake_open_pr)
+    monkeypatch.setattr("shikigami.activities.base.open_pr", fake_open_pr)
     pulls = {
         "meru": [{"number": 21, "title": "chore(trust): onboard golem - fence", "state": "closed", "merged": True}]
     }
@@ -679,7 +711,7 @@ def locking(admin: bool, users: set[str]) -> tuple[Activities, list[tuple[str, s
         return httpx2.Response(201 if request.method == "POST" else 204, json={})
 
     http = httpx2.AsyncClient(transport=httpx2.MockTransport(gitea))
-    tokens = TokenSource(http, "https://auth.test/token/", "thoth", TOKEN_FILE)
+    tokens = TokenSource(http=http, token_url="https://auth.test/token/", client_id="thoth", token_file=TOKEN_FILE)
     settings = Settings.model_construct(
         gitea_url="https://git.test",
         gitea_token=SecretStr("tok"),
@@ -687,7 +719,7 @@ def locking(admin: bool, users: set[str]) -> tuple[Activities, list[tuple[str, s
         merger_user="xolotl",
         apps_org="Meru",
     )
-    return Activities(settings, http, tokens), writes
+    return Activities(settings=settings, http=http, thoth_tokens=tokens), writes
 
 
 async def test_lock_out_protects_hands_over_and_leaves_in_that_order():
@@ -736,11 +768,11 @@ def first_build_gitea(admin: bool, run: dict | None) -> tuple[Activities, list[s
         return httpx2.Response(500)
 
     http = httpx2.AsyncClient(transport=httpx2.MockTransport(gitea))
-    tokens = TokenSource(http, "https://auth.test/token/", "thoth", TOKEN_FILE)
+    tokens = TokenSource(http=http, token_url="https://auth.test/token/", client_id="thoth", token_file=TOKEN_FILE)
     settings = Settings.model_construct(
         gitea_url="https://git.test", gitea_token=SecretStr("tok"), apps_org="Meru", first_build_reruns=2
     )
-    return Activities(settings, http, tokens), calls
+    return Activities(settings=settings, http=http, thoth_tokens=tokens), calls
 
 
 def ci_run(status: str, conclusion: str | None = None, attempt: int = 1) -> dict:
@@ -794,7 +826,8 @@ def marking(tmp_path: Path, namespaces: dict[str, dict[str, str]], refuse: int |
 
     def kubernetes(request: httpx2.Request) -> httpx2.Response:
         assert request.headers["authorization"] == "Bearer kube-token"
-        assert request.method == "PATCH" and request.headers["content-type"] == "application/merge-patch+json"
+        assert request.method == "PATCH"
+        assert request.headers["content-type"] == "application/merge-patch+json"
         name = request.url.path.removeprefix("/api/v1/namespaces/")
         if name not in namespaces:
             return httpx2.Response(404, json={})
@@ -810,7 +843,8 @@ def marking(tmp_path: Path, namespaces: dict[str, dict[str, str]], refuse: int |
     (tmp_path / "token").write_text("kube-token\n")
     settings = Settings.model_construct(kubernetes_url="https://kube.test", kubernetes_dir=tmp_path)
     kube, http = httpx2.AsyncClient(transport=httpx2.MockTransport(kubernetes)), httpx2.AsyncClient()
-    return Activities(settings, http, TokenSource(http, "https://auth.test/token/", "thoth", TOKEN_FILE), kube)
+    tokens = TokenSource(http=http, token_url="https://auth.test/token/", client_id="thoth", token_file=TOKEN_FILE)
+    return Activities(settings=settings, http=http, thoth_tokens=tokens, kube=kube)
 
 
 async def test_retire_marks_both_namespaces_with_the_requests_removed_at(tmp_path: Path):
@@ -849,3 +883,36 @@ async def test_restore_takes_the_mark_off(tmp_path: Path):
     activities = marking(tmp_path, cluster)
     assert await ActivityEnvironment().run(activities.restore_unmark_namespaces, "golem") == ["golem", "golem-build"]
     assert cluster == {"golem": {"keep": "me"}, "golem-build": {}}
+
+
+def test_activity_names_are_the_ones_running_workflows_replay_against():
+    def names(group: type) -> set[str]:
+        found = (getattr(getattr(group, n), "__temporal_activity_definition", None) for n in dir(group))
+        return {d.name for d in found if d}
+
+    assert names(Activities) == {
+        "read_requests",
+        "read_existing_apps",
+        "declare_apps",
+        "ensure_repo",
+        "ensure_trust",
+        "ensure_deploy_files",
+        "first_build",
+        "lock_out",
+        "retire_stop",
+        "retire_wait_stopped",
+        "retire_park_marker",
+        "retire_trust",
+        "retire_runner",
+        "retire_archive",
+        "retire_mark_namespaces",
+        "restore_unmark_namespaces",
+        "retire_mark",
+        "dry_run",
+    }
+    assert names(BuildActivities) == {
+        "ensure_build_keys",
+        "ensure_zot_login",
+        "ensure_runner_registration",
+        "revoke_zot_login",
+    }

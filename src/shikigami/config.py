@@ -7,7 +7,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="SHIKIGAMI_")
+    """Everything Shikigami is configured with, from its SHIKIGAMI_* environment."""
+
+    model_config = SettingsConfigDict(env_prefix="SHIKIGAMI_", frozen=True)
 
     # Temporal's front door (D70): mutual TLS with the pod's pki_meru certificate + an Authentik token.
     temporal_address: str = "temporal-frontend.temporal.svc:7233"

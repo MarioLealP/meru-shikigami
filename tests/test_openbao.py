@@ -21,7 +21,7 @@ async def test_logs_in_with_the_pod_token_and_keeps_the_session(tmp_path: Path):
     jwt.write_text("jwt-1\n")
     seen: list[dict] = []
     async with bao(seen) as http:
-        login = KubernetesLogin(http, "https://openbao.test", "meru-shikigami-onboard", jwt)
+        login = KubernetesLogin(http=http, addr="https://openbao.test", role="meru-shikigami-onboard", jwt_file=jwt)
         assert await login.get() == "s.1"
         assert await login.get() == "s.1"
     assert seen == [{"role": "meru-shikigami-onboard", "jwt": "jwt-1"}]
@@ -34,7 +34,7 @@ async def test_logs_in_again_near_the_end_with_the_fresh_pod_token(tmp_path: Pat
     monkeypatch.setattr(openbao.time, "monotonic", lambda: now[0])
     seen: list[dict] = []
     async with bao(seen) as http:
-        login = KubernetesLogin(http, "https://openbao.test", "r", jwt)
+        login = KubernetesLogin(http=http, addr="https://openbao.test", role="r", jwt_file=jwt)
         assert await login.get() == "s.1"
         jwt.write_text("jwt-2")  # the kubelet swapped the file
         now[0] += 600 - openbao.EARLY  # a minute before the session ends

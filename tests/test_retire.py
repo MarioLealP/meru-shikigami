@@ -27,11 +27,12 @@ def test_the_stop_commit_turns_off_the_workload_and_the_runner():
 
 def test_an_enabled_line_already_there_is_flipped_not_doubled():
     values = retire.stopped_values(VALUES + "enabled: true\n")
-    assert values.count("enabled:") == 1 and yaml.safe_load(values)["enabled"] is False
+    assert values.count("enabled:") == 1
+    assert yaml.safe_load(values)["enabled"] is False
 
 
 def test_values_without_an_owner_line_are_a_bad_layout():
-    with pytest.raises(trust.BadLayout):
+    with pytest.raises(trust.BadLayoutError):
         retire.stopped_values("name: golem\n")
 
 

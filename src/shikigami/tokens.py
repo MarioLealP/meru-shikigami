@@ -2,12 +2,14 @@
 
 The login is the pod's own Kubernetes token (D104: nuwa-app authentikLogin, audience authentik, kubelet-refreshed),
 sent as the client assertion - no password anywhere. Authentik checks it against k3s's key and answers with the
-rights of the groups that list this workload (blueprints shikigami.yaml)."""
+rights of the groups that list this workload (blueprints shikigami.yaml).
+"""
 
 import time
 from pathlib import Path
 
 import httpx2
+from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from shikigami.incoming import Incoming
 
@@ -20,25 +22,30 @@ class _TokenAnswer(Incoming):
     expires_in: int = 600
 
 
-class TokenSource:
+class TokenSource(BaseModel):
     """One provider's tokens for this pod's workload. Tokens last 10 minutes (thoth.yaml, temporal.yaml)."""
 
-    def __init__(self, http: httpx2.AsyncClient, token_url: str, client_id: str, token_file: Path):
-        self._http, self._url, self._client_id, self._token_file = http, token_url, client_id, token_file
-        self._token: str | None = None
-        self._expires = 0.0
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    http: httpx2.AsyncClient
+    token_url: str
+    client_id: str
+    token_file: Path
+    _token: str | None = PrivateAttr(default=None)  # the cache: the one thing here that changes
+    _expires: float = PrivateAttr(default=0.0)
 
     async def get(self) -> str:
+        """A valid access token, fetching a new one when the cached one is nearly used up."""
         if self._token is None or time.monotonic() >= self._expires - EARLY:
-            response = await self._http.post(
-                self._url,
+            response = await self.http.post(
+                self.token_url,
                 data={
                     "grant_type": "client_credentials",
-                    "client_id": self._client_id,
-                    "scope": self._client_id,  # the provider's own scope mapping (temporal / thoth permissions)
+                    "client_id": self.client_id,
+                    "scope": self.client_id,  # the provider's own scope mapping (temporal / thoth permissions)
                     "client_assertion_type": ASSERTION,
                     # re-read each time: the kubelet swaps in a fresh token before the old one runs out
-                    "client_assertion": self._token_file.read_text().strip(),
+                    "client_assertion": self.token_file.read_text().strip(),
                 },
             )
             response.raise_for_status()

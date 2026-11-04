@@ -1,7 +1,9 @@
-"""Reading an app's Argo CD Application (D85): Shikigami's retire pass parks the marker only once Argo has applied the
-stop commit - with preserveResourcesOnDeletion, an Application removed before that leaves its pods running with nothing
-to stop them. Read only (Meru/meru rbac/: `get applications` in argocd), with the pod's API token (nuwa-app
-kubernetesApi)."""
+"""Reading an app's Argo CD Application (D85).
+
+Shikigami's retire pass parks the marker only once Argo has applied the stop commit - with preserveResourcesOnDeletion,
+an Application removed before that leaves its pods running with nothing to stop them. Read only (Meru/meru rbac/: `get
+applications` in argocd), with the pod's API token (nuwa-app kubernetesApi).
+"""
 
 from pathlib import Path
 
@@ -35,6 +37,8 @@ class _Status(Incoming):
 
 
 class Application(Incoming):
+    """An Argo CD Application: only its status is read."""
+
     status: _Status | None = None
 
 

@@ -12,7 +12,7 @@ from temporalio.worker import Worker
 
 from shikigami import build_creds as creds
 from shikigami.activities import BuildActivities
-from shikigami.openbao import KV, Conflict
+from shikigami.openbao import KV, ConflictError
 from shikigami.workflows import OnboardBuild
 
 REGISTRY = "zot.clockmost.com"
@@ -47,7 +47,7 @@ def kv(store: dict[str, list[dict[str, str] | None]]) -> KV:
     async def token() -> str:
         return "t"
 
-    return KV(openbao(store), "https://openbao.test", "apps", token)
+    return KV(http=openbao(store), addr="https://openbao.test", mount="apps", token=token)
 
 
 async def fake_new_key(cosign: str) -> tuple[str, str, str]:
@@ -75,7 +75,7 @@ def build_activities(store: dict, runner: str = "runner-token") -> BuildActiviti
     async def runner_token(app: str) -> str:
         return runner
 
-    return BuildActivities(kv(store), REGISTRY, "cosign", runner_token)
+    return BuildActivities(kv=kv(store), registry=REGISTRY, cosign="cosign", runner_token=runner_token)
 
 
 def test_htpasswd_line_added_kept_and_replaced():
@@ -100,7 +100,7 @@ async def test_kv_reads_missing_deleted_and_conflicts():
     assert (await bao.read("none")).version == 0
     deleted = await bao.read("gone")
     assert (deleted.data, deleted.version) == (None, 2)
-    with pytest.raises(Conflict):
+    with pytest.raises(ConflictError):
         await bao.write("gone", {"a": "2"}, cas=0)
     await bao.write("gone", {"a": "2"}, cas=2)
     assert (await bao.read("gone")).data == {"a": "2"}

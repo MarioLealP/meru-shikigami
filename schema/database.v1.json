@@ -2,6 +2,7 @@
   "$defs": {
     "DatabaseSpec": {
       "additionalProperties": false,
+      "description": "What a database asks for.",
       "properties": {
         "owner": {
           "pattern": "^[a-z0-9]([-a-z0-9_.]{0,61}[a-z0-9])?$",
@@ -56,6 +57,7 @@
     },
     "DatabaseStorage": {
       "additionalProperties": false,
+      "description": "The disk a database gets.",
       "properties": {
         "size": {
           "pattern": "^[1-9][0-9]{0,4}(Mi|Gi)$",
@@ -80,6 +82,7 @@
     },
     "Metadata": {
       "additionalProperties": false,
+      "description": "Who the request is for, and who approved or removed it.",
       "properties": {
         "name": {
           "pattern": "^[a-z]([-a-z0-9]{0,28}[a-z0-9])?$",
@@ -135,6 +138,7 @@
     }
   },
   "additionalProperties": false,
+  "description": "A request for a database: databases/<name>.yaml.",
   "properties": {
     "apiVersion": {
       "const": "meru.clockmost.com/v1",

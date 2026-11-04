@@ -1,8 +1,11 @@
-"""An app's trust files (D82): its fence in Meru/meru, its signing key + build exception in Meru/kyverno, and its push
-rule in Meru/zot. All derived - the request picks none of it: the fence is the one shape every app has (Meru/meru's
-scripts/fences.py checks it), the key is the one OnboardBuild made, the push rule lets only its builder push.
-Shikigami only ever adds an app; an existing entry is never changed here. Text work that keeps each file's layout (and
-the YAML files' comments); the git side is in proposals.py."""
+"""An app's trust files (D82).
+
+Its fence in Meru/meru, its signing key + build exception in Meru/kyverno, and its push rule in Meru/zot. All derived -
+the request picks none of it: the fence is the one shape every app has (Meru/meru's scripts/fences.py checks it), the
+key is the one OnboardBuild made, the push rule lets only its builder push. Shikigami only ever adds an app; an existing
+entry is never changed here. Text work that keeps each file's layout (and the YAML files' comments); the git side is in
+proposals.py.
+"""
 
 import json
 import re
@@ -13,16 +16,19 @@ from shikigami.build_creds import builder
 from shikigami.marker import key_trusted
 
 
-class BadLayout(Exception):
+class BadLayoutError(Exception):
     """A trust repo's file doesn't look the way Shikigami adds to it."""
 
 
-class Conflict(Exception):
-    """A trust repo already has another entry for the app (a key, a push rule) - replacing it is a person's call, never
-    Shikigami's."""
+class ConflictError(Exception):
+    """A trust repo already has another entry for the app (a key, a push rule).
+
+    Replacing it is a person's call, never Shikigami's.
+    """
 
 
 def title(app: str) -> str:
+    """The app's name with a capital first letter, as the generated comments write it."""
     return app[:1].upper() + app[1:]
 
 
@@ -81,7 +87,7 @@ def with_resource(kustomization: str, folder: str, path: str) -> str:
         return kustomization
     entries = list(re.finditer(rf"^  - {re.escape(folder)}/[^\n]+$", kustomization, re.MULTILINE))
     if not entries:
-        raise BadLayout(f"kustomization.yaml: no `  - {folder}/...` entry to add {path} after")
+        raise BadLayoutError(f"kustomization.yaml: no `  - {folder}/...` entry to add {path} after")
     end = entries[-1].end()
     return f"{kustomization[:end]}\n  - {path}{kustomization[end:]}"
 
@@ -92,15 +98,17 @@ def without_resource(kustomization: str, path: str) -> str:
 
 
 def with_key(signing_keys: str, app: str, public_key: str) -> str:
-    """The signing-keys ConfigMap with the app's key added at the end of `data` (the file's last section). Kept if it
-    already trusts exactly this key; another key for the app raises Conflict."""
+    """The signing-keys ConfigMap with the app's key added at the end of `data` (the file's last section).
+
+    Kept if it already trusts exactly this key; another key for the app raises ConflictError.
+    """
     data = (yaml.safe_load(signing_keys) or {}).get("data")
     if not isinstance(data, dict):
-        raise BadLayout("keys/meru-signing-keys.yaml: no data section")
+        raise BadLayoutError("keys/meru-signing-keys.yaml: no data section")
     if app in data:
         if key_trusted(signing_keys, app, public_key):
             return signing_keys
-        raise Conflict(f"Meru/kyverno already trusts another key for {app}")
+        raise ConflictError(f"Meru/kyverno already trusts another key for {app}")
     lines = [line.strip() for line in public_key.strip().splitlines() if line.strip()]
     block = f"  {app}: |\n" + "".join(f"    {line}\n" for line in lines)
     added = signing_keys.rstrip("\n") + "\n" + block
@@ -110,7 +118,7 @@ def with_key(signing_keys: str, app: str, public_key: str) -> str:
     except yaml.YAMLError:
         right = False
     if not right:
-        raise BadLayout("keys/meru-signing-keys.yaml: data isn't the last section - add the key by hand")
+        raise BadLayoutError("keys/meru-signing-keys.yaml: data isn't the last section - add the key by hand")
     return added
 
 
@@ -124,20 +132,22 @@ def push_rule(app: str) -> dict:
 
 
 def with_push_rule(config: str, app: str) -> str:
-    """Zot's config.json with meru/<app>'s push rule added (kept if it's already exactly that). The file is plain JSON
-    kept as `json.dumps(indent=2)` writes it, so re-writing it changes only the new block; a file in another layout or
-    a different rule for the repo is left for a person."""
+    """Zot's config.json with meru/<app>'s push rule added (kept if it's already exactly that).
+
+    The file is plain JSON kept as `json.dumps(indent=2)` writes it, so re-writing it changes only the new block; a file
+    in another layout or a different rule for the repo is left for a person.
+    """
     parsed = json.loads(config)
     if json.dumps(parsed, indent=2) + "\n" != config:
-        raise BadLayout("config.json isn't in json.dumps(indent=2) layout - add the push rule by hand")
+        raise BadLayoutError("config.json isn't in json.dumps(indent=2) layout - add the push rule by hand")
     repositories = parsed.get("http", {}).get("accessControl", {}).get("repositories")
     if not isinstance(repositories, dict):
-        raise BadLayout("config.json: no http.accessControl.repositories")
+        raise BadLayoutError("config.json: no http.accessControl.repositories")
     repo = f"meru/{app}"
     if repo in repositories:
         if repositories[repo] == push_rule(app):
             return config
-        raise Conflict(f"Meru/zot already has another rule for {repo}")
+        raise ConflictError(f"Meru/zot already has another rule for {repo}")
     repositories[repo] = push_rule(app)
     return json.dumps(parsed, indent=2) + "\n"
 
@@ -146,13 +156,13 @@ def without_key(signing_keys: str, app: str) -> str:
     """The signing-keys ConfigMap without the app's key block; every other key stays exactly as it was."""
     data = (yaml.safe_load(signing_keys) or {}).get("data")
     if not isinstance(data, dict):
-        raise BadLayout("keys/meru-signing-keys.yaml: no data section")
+        raise BadLayoutError("keys/meru-signing-keys.yaml: no data section")
     if app not in data:
         return signing_keys
     removed = re.sub(rf"^  {re.escape(app)}: \|\n(?:    [^\n]*\n)*", "", signing_keys, count=1, flags=re.MULTILINE)
     left = (yaml.safe_load(removed) or {}).get("data") or {}
     if app in left or left != {name: key for name, key in data.items() if name != app}:
-        raise BadLayout(f"keys/meru-signing-keys.yaml: {app}'s key isn't one plain block - remove it by hand")
+        raise BadLayoutError(f"keys/meru-signing-keys.yaml: {app}'s key isn't one plain block - remove it by hand")
     return removed
 
 
@@ -160,10 +170,10 @@ def without_push_rule(config: str, app: str) -> str:
     """Zot's config.json without meru/<app>'s rule (same layout rule as with_push_rule)."""
     parsed = json.loads(config)
     if json.dumps(parsed, indent=2) + "\n" != config:
-        raise BadLayout("config.json isn't in json.dumps(indent=2) layout - remove the push rule by hand")
+        raise BadLayoutError("config.json isn't in json.dumps(indent=2) layout - remove the push rule by hand")
     repositories = parsed.get("http", {}).get("accessControl", {}).get("repositories")
     if not isinstance(repositories, dict):
-        raise BadLayout("config.json: no http.accessControl.repositories")
+        raise BadLayoutError("config.json: no http.accessControl.repositories")
     if repositories.pop(f"meru/{app}", None) is None:
         return config
     return json.dumps(parsed, indent=2) + "\n"

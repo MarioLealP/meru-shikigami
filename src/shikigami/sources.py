@@ -1,5 +1,6 @@
 """Reading the two sides Shikigami compares: the requests (Meru/requests, D35) and what exists (Thoth)."""
 
+import asyncio
 import io
 import tarfile
 import tempfile
@@ -35,6 +36,14 @@ class _Item(Incoming):
 _ITEMS = TypeAdapter(list[_Item])
 
 
+def _unpack(archive: bytes, into: Path) -> Path:
+    """Extract the archive into the folder; returns the repo's root."""
+    with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
+        tar.extractall(into, filter="data")  # refuses links out, absolute paths, devices
+    roots = list(into.iterdir())  # Gitea wraps everything in one <repo>/ folder
+    return roots[0] if len(roots) == 1 and roots[0].is_dir() else into
+
+
 @asynccontextmanager
 async def requests_checkout(
     http: httpx2.AsyncClient, gitea_url: str, repo: str, branch: str, token: str
@@ -46,10 +55,8 @@ async def requests_checkout(
     commit = _Branch.model_validate_json(branch_info.content).commit.id
     archive = await http.get(f"{gitea_url}/api/v1/repos/{repo}/archive/{commit}.tar.gz", headers=headers)
     archive.raise_for_status()
-    with tempfile.TemporaryDirectory() as tmp, tarfile.open(fileobj=io.BytesIO(archive.content)) as tar:
-        tar.extractall(tmp, filter="data")  # refuses links out, absolute paths, devices
-        roots = list(Path(tmp).iterdir())  # Gitea wraps everything in one <repo>/ folder
-        yield commit, roots[0] if len(roots) == 1 and roots[0].is_dir() else Path(tmp)
+    with tempfile.TemporaryDirectory() as tmp:
+        yield commit, await asyncio.to_thread(_unpack, archive.content, Path(tmp))
 
 
 async def read_requests(
@@ -57,7 +64,7 @@ async def read_requests(
 ) -> RequestsSnapshot:
     """The branch's latest commit, checked with the same library as the gate (D69)."""
     async with requests_checkout(http, gitea_url, repo, branch, token) as (commit, root):
-        loaded = load(root)
+        loaded = await asyncio.to_thread(load, root)
     return RequestsSnapshot(commit=commit, apps=loaded.apps, databases=loaded.databases, problems=loaded.problems)
 
 
@@ -79,22 +86,31 @@ class Verdict(BaseModel):
     problems: list[str]
 
 
+def _added_problems(root: Path, proposal: Proposal) -> list[str]:
+    """The problems the checkout at `root` gains once the proposal is written into it."""
+    before = set(load(root).problems)
+    target = root / proposal.path
+    target.parent.mkdir(exist_ok=True)
+    target.write_text(proposal.content)
+    prefix = f"{root}/"
+    return [p.replace(prefix, "") for p in load(root).problems if p not in before]
+
+
 async def check_proposal(
     http: httpx2.AsyncClient, gitea_url: str, repo: str, branch: str, token: str, proposal: Proposal
 ) -> Verdict:
-    """The proposal checked together with every request on main, by the same load() a sync uses - so the checks
-    across files (one host per app, a database's app) count too. Problems main already has aren't blamed on it."""
+    """The proposal checked together with every request on main, by the same load() a sync uses.
+
+    So the checks across files (one host per app, a database's app) count too. Problems main already has aren't blamed
+    on it.
+    """
     async with requests_checkout(http, gitea_url, repo, branch, token) as (commit, root):
-        before = set(load(root).problems)
-        target = root / proposal.path
-        target.parent.mkdir(exist_ok=True)
-        target.write_text(proposal.content)
-        after = load(root).problems
-        prefix = f"{root}/"
-    return Verdict(commit=commit, problems=[p.replace(prefix, "") for p in after if p not in before])
+        problems = await asyncio.to_thread(_added_problems, root, proposal)
+    return Verdict(commit=commit, problems=problems)
 
 
 async def read_existing_apps(http: httpx2.AsyncClient, thoth_url: str, token: str) -> dict[str, ExistingApp]:
+    """Every app item Thoth holds, by key."""
     response = await http.get(
         f"{thoth_url}/v1/items", params={"type": "app", "limit": 1000}, headers={"Authorization": f"Bearer {token}"}
     )
@@ -109,8 +125,11 @@ async def read_existing_apps(http: httpx2.AsyncClient, thoth_url: str, token: st
 
 
 async def declare_apps(http: httpx2.AsyncClient, thoth_url: str, token: str, snapshot: RequestsSnapshot) -> dict:
-    """Every requested app, as one Thoth snapshot (D52): Shikigami declares, Thoth keeps them `planned` until a scanner
-    sees them, and only Anubis retires (D53). The scan id is the requests commit, so a resend changes nothing."""
+    """Every requested app, as one Thoth snapshot (D52).
+
+    Shikigami declares, Thoth keeps them `planned` until a scanner sees them, and only Anubis retires (D53). The scan id
+    is the requests commit, so a resend changes nothing.
+    """
     items = [
         {"type": "app", "key": name, "name": name, "attributes": {"template": app.spec.template}}
         for name, app in sorted(snapshot.apps.items())
@@ -125,10 +144,12 @@ async def declare_apps(http: httpx2.AsyncClient, thoth_url: str, token: str, sna
 
 
 async def mark_retire_step(http: httpx2.AsyncClient, thoth_url: str, token: str, app: str, status: str) -> str:
-    """Tell Thoth where an app's retirement stands (D85): decommissioning when the pass starts, retained when it's
-    done, planned again when it's restored (D106). Bookkeeping, never a gate: the stop and the revokes matter more
-    than Thoth's status, so a refusal is said and the pass goes on - the next pass (every sync) tries again. Network
-    and server errors raise (retried)."""
+    """Tell Thoth where an app's retirement stands (D85).
+
+    Decommissioning when the pass starts, retained when it's done, planned again when it's restored (D106). Bookkeeping,
+    never a gate: the stop and the revokes matter more than Thoth's status, so a refusal is said and the pass goes on -
+    the next pass (every sync) tries again. Network and server errors raise (retried).
+    """
     reason = "Shikigami's restore (D106)" if status == "planned" else "Shikigami's retire pass (D85)"
     response = await http.post(
         f"{thoth_url}/v1/retire-steps",
