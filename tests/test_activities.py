@@ -153,6 +153,7 @@ async def deploy(
     secrets: list[str] | None = None,
     admin: bool = True,
     pulls: list[dict] | None = None,
+    entries: dict[str, str] | None = None,
 ) -> tuple[str, list[dict]]:
     """ensure_deploy_files over the fake Gitea; the AGit PR it opens is recorded among the calls."""
     calls: list[dict] = []
@@ -163,7 +164,12 @@ async def deploy(
     with pytest.MonkeyPatch.context() as m:
         m.setattr("shikigami.activities.base.open_pr", fake_open_pr)
         result = await ActivityEnvironment().run(
-            gitea(files, public, calls, hidden, admin, pulls).ensure_deploy_files, "echo", "mario", PUBLIC_KEY, secrets
+            gitea(files, public, calls, hidden, admin, pulls).ensure_deploy_files,
+            "echo",
+            "mario",
+            PUBLIC_KEY,
+            secrets,
+            entries,
         )
     return result, calls
 
@@ -197,6 +203,18 @@ async def test_the_requests_secrets_are_wired_into_values():
         "secretEnv:\n"
         "  DISCORD_TOKEN:\n    secret: env\n    key: discord-token\n"
         "  API_KEY:\n    secret: env\n    key: api-key\n"
+    )
+
+
+async def test_a_restore_after_a_change_wires_each_name_to_its_entry():
+    entries = {"api-key": "env-20261105-a1b2c3"}
+    _, [_, opened, _] = await deploy(TEMPLATE, READY, secrets=["discord-token", "api-key"], entries=entries)
+    assert opened["pr"]["files"]["deploy/values.yaml"] == (
+        "name: echo\nowner: mario\n\n" + marker.SECRETS_COMMENT + "\n"
+        "externalSecrets:\n  env: {}\n  env-20261105-a1b2c3: {}\n"
+        "secretEnv:\n"
+        "  DISCORD_TOKEN:\n    secret: env\n    key: discord-token\n"
+        "  API_KEY:\n    secret: env-20261105-a1b2c3\n    key: api-key\n"
     )
 
 

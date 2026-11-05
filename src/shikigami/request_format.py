@@ -22,6 +22,9 @@ Name = Annotated[str, StringConstraints(pattern=r"^[a-z]([-a-z0-9]{0,28}[a-z0-9]
 Owner = Annotated[str, StringConstraints(pattern=r"^[a-z0-9]([-a-z0-9_.]{0,61}[a-z0-9])?$")]
 Quantity = Annotated[str, StringConstraints(pattern=r"^[1-9][0-9]{0,4}(Mi|Gi)$")]
 Days = Annotated[str, StringConstraints(pattern=r"^[1-9][0-9]{0,3}d$")]
+# The OpenBao entry under apps/meru/<app>/eso/ holding a secret's value: env when requested with the app (D99),
+# env-<yyyymmdd>-<6 hex> when a later change wrote it (D123) - Janus picks the name, the request records it.
+Entry = Annotated[str, StringConstraints(pattern=r"^env(-[0-9]{8}-[0-9a-f]{6})?$")]
 Size = Literal["small", "medium", "large"]  # small 50m/64Mi/256Mi, medium 200m/256Mi/1Gi, large 1/1Gi/4Gi (approval)
 StorageClass = Literal["ssd", "hdd"]
 
@@ -84,11 +87,14 @@ class Secret(_Model):
     """One environment variable from OpenBao (D99): `discord-token` -> DISCORD_TOKEN.
 
     Only the name lives here; Janus writes the value to OpenBao (apps/meru/<app>/eso/env) when the app is requested -
-    typed in, or made by Janus.
+    typed in, or made by Janus. A later change writes a new entry and the request points the name at it (D123).
     """
 
     name: Name
     generate: bool = Field(default=False, description="true: Janus makes the value (secrets.token_urlsafe(32)).")
+    entry: Entry = Field(
+        default="env", description="The OpenBao entry with the value: env, or env-<date>-<id> from a change (D123)."
+    )
 
 
 class AppSpec(_Model):

@@ -1,4 +1,5 @@
 import pytest
+from pydantic import ValidationError
 
 from shikigami.models import ExistingApp
 from shikigami.plan import plan
@@ -65,3 +66,26 @@ def test_a_removed_request_retires_its_app_and_keeps_saying_so():
         (action,) = plan({"golem": app("golem", removed=True)}, current)
         assert (action.kind, action.reasons) == ("retire", ["removed by its request (D83)"])
         assert action.owner == "mario"  # the retire steps still know whose it was
+
+
+def test_names_moved_by_a_change_carry_their_entry():
+    spec = {
+        "owner": "mario",
+        "description": "an app",
+        "secrets": [{"name": "api-key"}, {"name": "glitchtip-token", "entry": "env-20261105-a1b2c3"}],
+    }
+    request = App.model_validate(
+        {"apiVersion": "meru.clockmost.com/v1", "kind": "App", "metadata": {"name": "echo"}, "spec": spec}
+    )
+    (action,) = plan({"echo": request}, {})
+    assert action.secrets == ["api-key", "glitchtip-token"]
+    assert action.secret_entries == {"glitchtip-token": "env-20261105-a1b2c3"}  # env stays implicit
+
+
+@pytest.mark.parametrize("entry", ["env-", "env-2026-a1b2c3", "env-20261105-A1B2C3", "other", "env-20261105-a1b2c3/x"])
+def test_an_entry_has_to_be_env_or_a_change_name(entry: str):
+    spec = {"owner": "mario", "description": "an app", "secrets": [{"name": "api-key", "entry": entry}]}
+    with pytest.raises(ValidationError, match="entry"):
+        App.model_validate(
+            {"apiVersion": "meru.clockmost.com/v1", "kind": "App", "metadata": {"name": "e"}, "spec": spec}
+        )

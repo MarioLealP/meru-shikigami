@@ -49,4 +49,5 @@ class AppAction(BaseModel):
     description: str | None = None
     owner: str | None = None
     secrets: list[str] = []  # the request's secret names (D99), wired into deploy/values.yaml with the marker
+    secret_entries: dict[str, str] = {}  # name -> OpenBao entry, for the names not in env (D123)
     removed_at: datetime | None = None  # removedAt (Xolotl's stamp): the retire pass marks the namespaces with it

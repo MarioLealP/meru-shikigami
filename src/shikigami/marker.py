@@ -6,6 +6,7 @@ repos.py.
 """
 
 import re
+from collections.abc import Mapping
 
 import yaml
 
@@ -58,18 +59,23 @@ def env_name(secret: str) -> str:
     return secret.upper().replace("-", "_")
 
 
-def with_secrets(text: str, secrets: list[str], path: str) -> str:
+def with_secrets(text: str, secrets: list[str], path: str, entries: Mapping[str, str] | None = None) -> str:
     """deploy/values.yaml with the request's secrets wired (D99).
 
-    One ExternalSecret `env` (ESO fills it from the app's own OpenBao path) and one env var per name. Appended at the
-    end; kept if that exact block is already there (a restore, D106: the first onboarding wrote it). Any other wiring of
-    either key is refused - its owner's wiring isn't Shikigami's to merge.
+    One ExternalSecret per OpenBao entry the names live in (ESO fills each from the app's own path) - `env`, plus a
+    change's `env-<date>-<id>` on a restore after one (D123) - and one env var per name. `entries` maps the names not in
+    env; an app with every name in env gets exactly the D99 block. Appended at the end; kept if that exact block is
+    already there (a restore, D106: the first onboarding wrote it). Any other wiring of either key is refused - its
+    owner's wiring isn't Shikigami's to merge.
     """
     if not secrets:
         return text
-    lines = ["", SECRETS_COMMENT, "externalSecrets:", "  env: {}", "secretEnv:"]
+    entry = {name: (entries or {}).get(name, "env") for name in secrets}
+    lines = ["", SECRETS_COMMENT, "externalSecrets:"]
+    lines += [f"  {used}: {{}}" for used in dict.fromkeys(entry.values())]  # first use first: env leads as before
+    lines.append("secretEnv:")
     for name in secrets:
-        lines += [f"  {env_name(name)}:", "    secret: env", f"    key: {name}"]
+        lines += [f"  {env_name(name)}:", f"    secret: {entry[name]}", f"    key: {name}"]
     block = "\n".join(lines) + "\n"
     if text.endswith(block):
         return text

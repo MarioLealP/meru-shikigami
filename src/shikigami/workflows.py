@@ -76,7 +76,7 @@ class AppWorkflow:
             if action.owner:
                 deploy = await workflow.execute_activity_method(
                     Activities.ensure_deploy_files,
-                    args=[action.app, action.owner, public_key, action.secrets],
+                    args=[action.app, action.owner, public_key, action.secrets, action.secret_entries],
                     start_to_close_timeout=TIMEOUT,
                     retry_policy=RETRY,
                 )
