@@ -34,6 +34,7 @@ def plan(apps: dict[str, App], existing: dict[str, ExistingApp]) -> list[AppActi
                 description=spec.description,
                 owner=spec.owner,
                 secrets=[secret.name for secret in spec.secrets],
+                secret_entries={secret.name: secret.entry for secret in spec.secrets if secret.entry != "env"},
                 removed_at=apps[name].metadata.removed_at,
             )
         )

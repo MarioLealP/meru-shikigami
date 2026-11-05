@@ -259,7 +259,7 @@
     },
     "Secret": {
       "additionalProperties": false,
-      "description": "One environment variable from OpenBao (D99): `discord-token` -> DISCORD_TOKEN.\n\nOnly the name lives here; Janus writes the value to OpenBao (apps/meru/<app>/eso/env) when the app is requested -\ntyped in, or made by Janus.",
+      "description": "One environment variable from OpenBao (D99): `discord-token` -> DISCORD_TOKEN.\n\nOnly the name lives here; Janus writes the value to OpenBao (apps/meru/<app>/eso/env) when the app is requested -\ntyped in, or made by Janus. A later change writes a new entry and the request points the name at it (D123).",
       "properties": {
         "name": {
           "pattern": "^[a-z]([-a-z0-9]{0,28}[a-z0-9])?$",
@@ -271,6 +271,13 @@
           "description": "true: Janus makes the value (secrets.token_urlsafe(32)).",
           "title": "Generate",
           "type": "boolean"
+        },
+        "entry": {
+          "default": "env",
+          "description": "The OpenBao entry with the value: env, or env-<date>-<id> from a change (D123).",
+          "pattern": "^env(-[0-9]{8}-[0-9a-f]{6})?$",
+          "title": "Entry",
+          "type": "string"
         }
       },
       "required": [

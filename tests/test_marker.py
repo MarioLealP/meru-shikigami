@@ -41,3 +41,21 @@ def test_trusts_only_the_same_key_for_the_same_app():
     assert not key_trusted(KEYS, "echo", KEY.replace("BBBB", "CCCC"))
     assert not key_trusted(KEYS, "echo", "")
     assert not key_trusted("", "echo", KEY)
+
+
+def test_secrets_all_in_env_give_the_d99_block_unchanged():
+    from shikigami.marker import SECRETS_COMMENT, with_secrets
+
+    want = (
+        "a: 1\n\n" + SECRETS_COMMENT + "\nexternalSecrets:\n  env: {}\nsecretEnv:\n  API_KEY:\n    secret: env\n"
+        "    key: api-key\n"
+    )
+    assert with_secrets("a: 1\n", ["api-key"], "x") == want
+    assert with_secrets("a: 1\n", ["api-key"], "x", {}) == want
+
+
+def test_a_name_moved_to_a_change_entry_lists_that_entry_once():
+    from shikigami.marker import with_secrets
+
+    out = with_secrets("", ["a", "b", "c"], "x", {"a": "env-20261105-a1b2c3", "c": "env-20261105-a1b2c3"})
+    assert "externalSecrets:\n  env-20261105-a1b2c3: {}\n  env: {}\nsecretEnv:" in out  # first use first, each once

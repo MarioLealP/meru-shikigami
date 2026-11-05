@@ -1,5 +1,7 @@
 """The activities that end onboarding: the deploy files, the first build and Shikigami's lock-out."""
 
+from collections.abc import Mapping
+
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
@@ -20,7 +22,9 @@ from shikigami.repos import (
 )
 
 
-def _deploy_files(template: str, values: str | None, owner: str, secrets: list[str]) -> dict[str, Edit]:
+def _deploy_files(
+    template: str, values: str | None, owner: str, secrets: list[str], entries: Mapping[str, str] | None = None
+) -> dict[str, Edit]:
     """The marker from the template, and deploy/values.yaml with the owner and secrets wired in if that changes it."""
     files = {
         "deploy/meru.yaml": Edit(before=None, after=marker.with_owner(template, owner, "deploy/meru.yaml.in")),
@@ -33,7 +37,7 @@ def _deploy_files(template: str, values: str | None, owner: str, secrets: list[s
     text = retire.restarted_values(values)  # a restore (D106): the stop's line goes with the park
     if marker.owner_unset(text):
         text = marker.with_owner(text, owner, "deploy/values.yaml")
-    text = marker.with_secrets(text, secrets, "deploy/values.yaml")
+    text = marker.with_secrets(text, secrets, "deploy/values.yaml", entries)
     if text != values:
         files["deploy/values.yaml"] = Edit(before=values, after=text)
     return files
@@ -43,7 +47,14 @@ class DeployActivities(ActivityBase):
     """The last onboarding steps, in the order they run (D81, D89, D90)."""
 
     @activity.defn
-    async def ensure_deploy_files(self, app: str, owner: str, public_key: str, secrets: list[str] | None = None) -> str:
+    async def ensure_deploy_files(
+        self,
+        app: str,
+        owner: str,
+        public_key: str,
+        secrets: list[str] | None = None,
+        entries: dict[str, str] | None = None,
+    ) -> str:
         """Propose deploy/meru.yaml, the marker that makes Meru deploy the repo (D81).
 
         Made from the template's deploy/meru.yaml.in with the request's owner, plus the owner and the request's secrets
@@ -68,7 +79,7 @@ class DeployActivities(ActivityBase):
             return "waiting: no deploy/meru.yaml.in (repo generated before the template had it)"
         values = await read_file(self.http, s.gitea_url, token, org, app, "deploy/values.yaml")
         try:
-            files = _deploy_files(template[0], values[0] if values else None, owner, secrets or [])
+            files = _deploy_files(template[0], values[0] if values else None, owner, secrets or [], entries)
         except marker.BadTemplateError as e:
             raise ApplicationError(str(e), non_retryable=True) from e
         # Xolotl merges it: Write now, not only at the lock-out (D89). A repo Shikigami already left (a restore, D106)

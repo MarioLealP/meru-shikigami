@@ -60,7 +60,9 @@ def sync_activities(
 
 def onboard_activities(log: list[str], deploy: str, first_build: str | None):
     @activity.defn(name="ensure_deploy_files")
-    async def ensure_deploy_files(app: str, owner: str, public_key: str, secrets: list[str]) -> str:
+    async def ensure_deploy_files(
+        app: str, owner: str, public_key: str, secrets: list[str], entries: dict[str, str] | None = None
+    ) -> str:
         log.append(f"ensure_deploy_files {app} {owner}")
         return deploy
 
