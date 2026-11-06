@@ -9,14 +9,14 @@ from datetime import datetime
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from shikigami import marker, retire, trust
 from shikigami.activities.base import ActivityBase
 from shikigami.activities.texts import PARK, STOP, retire_title
-from shikigami.argo import application, not_stopped
-from shikigami.namespaces import set_removed_at, stamp
-from shikigami.proposals import Edit
-from shikigami.repos import archive, change, commit_files, delete_runners, head, is_admin, read_file
-from shikigami.sources import mark_retire_step
+from shikigami.clients.argo import application, not_stopped
+from shikigami.clients.namespaces import set_removed_at, stamp
+from shikigami.clients.proposals import Edit
+from shikigami.clients.repos import archive, change, commit_files, delete_runners, head, is_admin, read_file
+from shikigami.clients.sources import mark_retire_step
+from shikigami.core import marker, retire, trust
 
 
 class RetireActivities(ActivityBase):

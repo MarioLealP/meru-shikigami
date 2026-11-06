@@ -20,10 +20,10 @@ dependencies = [
 ]
 
 [project.scripts]
-shikigami-validate = "shikigami.validate:main"
-shikigami-schema = "shikigami.schema:main"
-shikigami-run = "shikigami.main:main"
-shikigami-bootstrap = "shikigami.bootstrap:main"
+shikigami-validate = "shikigami.core.validate:main"
+shikigami-schema = "shikigami.models.schema:main"
+shikigami-run = "shikigami.__main__:main"
+shikigami-bootstrap = "shikigami.bootstrap.bootstrap:main"
 
 [build-system]
 requires = ["uv_build>=0.13.5,<0.14.0"]

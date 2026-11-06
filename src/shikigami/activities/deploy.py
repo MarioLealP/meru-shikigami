@@ -5,11 +5,11 @@ from collections.abc import Mapping
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from shikigami import glitchtip, marker, retire
 from shikigami.activities.base import ActivityBase
 from shikigami.activities.texts import DEPLOY_PR, retire_title
-from shikigami.proposals import Edit
-from shikigami.repos import (
+from shikigami.clients import glitchtip
+from shikigami.clients.proposals import Edit
+from shikigami.clients.repos import (
     add_writer,
     become_reader,
     dispatched_run,
@@ -20,6 +20,7 @@ from shikigami.repos import (
     rerun_failed,
     run_workflow,
 )
+from shikigami.core import marker, retire
 
 
 def _deploy_files(
