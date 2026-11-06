@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from shikigami import marker, retire
+from shikigami import glitchtip, marker, retire
 from shikigami.activities.base import ActivityBase
 from shikigami.activities.texts import DEPLOY_PR, retire_title
 from shikigami.proposals import Edit
@@ -23,9 +23,17 @@ from shikigami.repos import (
 
 
 def _deploy_files(
-    template: str, values: str | None, owner: str, secrets: list[str], entries: Mapping[str, str] | None = None
+    template: str,
+    values: str | None,
+    owner: str,
+    secrets: list[str],
+    entries: Mapping[str, str] | None = None,
+    dsn: str | None = None,
 ) -> dict[str, Edit]:
-    """The marker from the template, and deploy/values.yaml with the owner and secrets wired in if that changes it."""
+    """The marker from the template, and deploy/values.yaml wired if that changes it.
+
+    The owner, the GlitchTip DSN (D125) and the request's secrets.
+    """
     files = {
         "deploy/meru.yaml": Edit(before=None, after=marker.with_owner(template, owner, "deploy/meru.yaml.in")),
         "deploy/meru.yaml.in": Edit(before=template, after=None),
@@ -37,6 +45,7 @@ def _deploy_files(
     text = retire.restarted_values(values)  # a restore (D106): the stop's line goes with the park
     if marker.owner_unset(text):
         text = marker.with_owner(text, owner, "deploy/values.yaml")
+    text = marker.with_glitchtip(text, dsn)
     text = marker.with_secrets(text, secrets, "deploy/values.yaml", entries)
     if text != values:
         files["deploy/values.yaml"] = Edit(before=values, after=text)
@@ -47,6 +56,26 @@ class DeployActivities(ActivityBase):
     """The last onboarding steps, in the order they run (D81, D89, D90)."""
 
     @activity.defn
+    async def ensure_glitchtip(self, app: str) -> str | None:
+        """The app's GlitchTip project, made if missing, and its DSN (D125); None without a GlitchTip token.
+
+        Runs every pass, so apps onboarded before D125 get their project too. Their repo is theirs (D89): the DSN goes
+        in by their own PR, so a project made here has its DSN logged.
+        """
+        s = self.settings
+        if s.glitchtip_token is None:
+            return None
+        try:
+            dsn, created = await glitchtip.project_dsn(
+                self.http, s.glitchtip_url, s.glitchtip_token, s.glitchtip_org, s.glitchtip_team, app
+            )
+        except ValueError as e:
+            raise ApplicationError(str(e), non_retryable=True) from e
+        if created:
+            activity.logger.info("app %s: GlitchTip project created, DSN %s", app, dsn)
+        return dsn
+
+    @activity.defn
     async def ensure_deploy_files(
         self,
         app: str,
@@ -54,6 +83,7 @@ class DeployActivities(ActivityBase):
         public_key: str,
         secrets: list[str] | None = None,
         entries: dict[str, str] | None = None,
+        dsn: str | None = None,
     ) -> str:
         """Propose deploy/meru.yaml, the marker that makes Meru deploy the repo (D81).
 
@@ -79,7 +109,7 @@ class DeployActivities(ActivityBase):
             return "waiting: no deploy/meru.yaml.in (repo generated before the template had it)"
         values = await read_file(self.http, s.gitea_url, token, org, app, "deploy/values.yaml")
         try:
-            files = _deploy_files(template[0], values[0] if values else None, owner, secrets or [], entries)
+            files = _deploy_files(template[0], values[0] if values else None, owner, secrets or [], entries, dsn)
         except marker.BadTemplateError as e:
             raise ApplicationError(str(e), non_retryable=True) from e
         # Xolotl merges it: Write now, not only at the lock-out (D89). A repo Shikigami already left (a restore, D106)

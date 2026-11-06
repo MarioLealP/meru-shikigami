@@ -45,6 +45,13 @@ class Settings(BaseSettings):
     openbao_role: str = "meru-shikigami-onboard"
     openbao_dir: Path = Path("/var/run/meru/openbao")  # token, ca.crt
 
+    # Each app's GlitchTip project and DSN (D125), with an API token on Mario's GlitchTip user (project:read +
+    # project:write; OpenBao entry env-20261105-7f03b1). Unset: onboarding wires no DSN.
+    glitchtip_url: str = "https://glitchtip.clockmost.com"
+    glitchtip_org: str = "meru"
+    glitchtip_team: str = "meru"
+    glitchtip_token: SecretStr | None = None
+
     # Reading Argo CD Applications (the retire pass, D85): the pod's API token + cluster CA (nuwa-app kubernetesApi).
     kubernetes_url: str = "https://kubernetes.default.svc"
     kubernetes_dir: Path = Path("/var/run/meru/kubernetes")  # token, ca.crt

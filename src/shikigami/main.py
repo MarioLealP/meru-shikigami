@@ -66,6 +66,7 @@ async def run() -> None:
                 activities.declare_apps,
                 activities.ensure_repo,
                 activities.ensure_trust,
+                activities.ensure_glitchtip,
                 activities.ensure_deploy_files,
                 activities.first_build,
                 activities.lock_out,

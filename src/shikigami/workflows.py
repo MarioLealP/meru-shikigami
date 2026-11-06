@@ -74,9 +74,16 @@ class AppWorkflow:
             )
             workflow.logger.info("app %s: %s", action.app, trust)
             if action.owner:
+                deploy_args = [action.app, action.owner, public_key, action.secrets, action.secret_entries]
+                # D125, behind a patch: a pass already running on the old code replays without this step.
+                if workflow.patched("glitchtip-dsn"):
+                    dsn = await workflow.execute_activity_method(
+                        Activities.ensure_glitchtip, action.app, start_to_close_timeout=TIMEOUT, retry_policy=RETRY
+                    )
+                    deploy_args.append(dsn)
                 deploy = await workflow.execute_activity_method(
                     Activities.ensure_deploy_files,
-                    args=[action.app, action.owner, public_key, action.secrets, action.secret_entries],
+                    args=deploy_args,
                     start_to_close_timeout=TIMEOUT,
                     retry_policy=RETRY,
                 )
