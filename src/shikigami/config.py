@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     # project:write; OpenBao entry env-20261105-7f03b1). Unset: onboarding wires no DSN.
     glitchtip_url: str = "https://glitchtip.clockmost.com"
     glitchtip_org: str = "meru"
-    glitchtip_team: str = "meru"
+    glitchtip_team: str = "Meru"  # the slug keeps the case it was made with (GlitchTip shows it as #Meru)
     glitchtip_token: SecretStr | None = None
 
     # Reading Argo CD Applications (the retire pass, D85): the pod's API token + cluster CA (nuwa-app kubernetesApi).
