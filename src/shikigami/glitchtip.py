@@ -16,7 +16,9 @@ class _Dsn(Incoming):
 
 
 class _Key(Incoming):
-    is_active: bool = Field(alias="isActive")
+    # GlitchTip 6.2.6 leaves isActive out of its key answers (seen live: name, rateLimit, dsn, projectID, ...): absent
+    # = active, the only kind it lists.
+    is_active: bool = Field(default=True, alias="isActive")
     dsn: _Dsn
 
 
