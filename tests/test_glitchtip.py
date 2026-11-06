@@ -69,6 +69,12 @@ async def test_a_suffixed_slug_is_refused_rather_than_wired():
         await gt.dsn()
 
 
+async def test_a_key_answer_without_is_active_counts_as_active():
+    # The shape GlitchTip 6.2.6 really answers (heimdall's first project, 2026-11-06): no isActive.
+    gt = GlitchTip({"echo"}, keys=[{"name": "", "rateLimit": None, "dsn": {"public": DSN}, "projectID": 1}])
+    assert await gt.dsn() == (DSN, False)
+
+
 async def test_no_active_key_gets_one_made():
     gt = GlitchTip({"echo"}, keys=[{"isActive": False, "dsn": {"public": DSN}}])
     assert await gt.dsn() == (OTHER, False)
