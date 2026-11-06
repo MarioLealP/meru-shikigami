@@ -51,3 +51,7 @@ resources:
 networkPolicy:
   enabled: true
   fromNamespaces: [janus, keda, xolotl]
+
+# Crash reports (D125): this app's GlitchTip project, which Shikigami made (it predates the marker's own DSN line).
+glitchtip:
+  dsn: https://8bbad38e4dc94b55915966ee197b4a57@glitchtip.clockmost.com/4
