@@ -3,10 +3,10 @@
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from shikigami import trust
 from shikigami.activities.base import ActivityBase
-from shikigami.proposals import Edit
-from shikigami.repos import public_file
+from shikigami.clients.proposals import Edit
+from shikigami.clients.repos import public_file
+from shikigami.core import trust
 
 
 class TrustActivities(ActivityBase):

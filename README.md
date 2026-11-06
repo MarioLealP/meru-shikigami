@@ -26,7 +26,7 @@ spec:
     host: echo.clockmost.com
 ```
 
-The Pydantic models in `src/shikigami/request_format.py` are the definition; `schema/*.v1.json` is the same thing
+The Pydantic models in `src/shikigami/models/request_format.py` are the definition; `schema/*.v1.json` is the same thing
 as JSON Schema, generated from them (a test fails if they drift). Everything optional has a default; fields such as
 `size: large`, `route.auth: none` or `exceptions` pause for an approval in the atlas.
 

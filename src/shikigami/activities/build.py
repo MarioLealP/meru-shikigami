@@ -7,8 +7,8 @@ from pydantic import BaseModel, ConfigDict
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from shikigami import build_creds as creds
-from shikigami.openbao import KV
+from shikigami.clients.openbao import KV
+from shikigami.core import build_creds as creds
 
 
 class BuildActivities(BaseModel):

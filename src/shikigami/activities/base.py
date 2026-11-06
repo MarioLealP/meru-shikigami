@@ -7,12 +7,12 @@ from pydantic import BaseModel, ConfigDict
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from shikigami import trust
 from shikigami.activities.texts import PROPOSALS, trust_title
+from shikigami.clients.proposals import Edit, ProposalFailedError, Pull, find_pr, open_pr
+from shikigami.clients.repos import head, public_file
+from shikigami.clients.tokens import TokenSource
 from shikigami.config import Settings
-from shikigami.proposals import Edit, ProposalFailedError, Pull, find_pr, open_pr
-from shikigami.repos import head, public_file
-from shikigami.tokens import TokenSource
+from shikigami.core import trust
 
 
 class ActivityBase(BaseModel):

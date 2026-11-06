@@ -5,9 +5,9 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from shikigami.activities.base import ActivityBase
-from shikigami.models import AppAction, ExistingApp, RequestsSnapshot
-from shikigami.repos import NoTemplateError, ensure_repo
-from shikigami.sources import declare_apps, read_existing_apps, read_requests
+from shikigami.clients.repos import NoTemplateError, ensure_repo
+from shikigami.clients.sources import declare_apps, read_existing_apps, read_requests
+from shikigami.models.sync import AppAction, ExistingApp, RequestsSnapshot
 
 
 class SyncActivities(ActivityBase):
