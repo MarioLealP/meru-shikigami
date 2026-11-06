@@ -17,8 +17,13 @@ secretEnv:
   SHIKIGAMI_GITEA_TOKEN:
     secret: gitea
     key: token
+  # D125: its GlitchTip API token (project:read + project:write), from its request's D123 change (Meru/requests#38).
+  SHIKIGAMI_GLITCHTIP_TOKEN:
+    secret: env-20261105-7f03b1
+    key: glitchtip-token
 externalSecrets:
   gitea: {}
+  env-20261105-7f03b1: {}
 # Its Authentik login for Temporal + Thoth tokens: its own Kubernetes token (D104) - the groups in the protected
 # blueprints (infra shikigami.yaml, thoth.yaml) list shikigami/shikigami. Nothing stored anywhere.
 authentikLogin:

@@ -58,11 +58,25 @@ def sync_activities(
     return [read_requests, read_existing_apps, declare_apps, ensure_repo, dry_run]
 
 
+DSN = "https://0123456789abcdef0123456789abcdef@glitchtip.clockmost.com/7"
+
+
 def onboard_activities(log: list[str], deploy: str, first_build: str | None):
+    @activity.defn(name="ensure_glitchtip")
+    async def ensure_glitchtip(app: str) -> str | None:
+        log.append(f"ensure_glitchtip {app}")
+        return DSN
+
     @activity.defn(name="ensure_deploy_files")
     async def ensure_deploy_files(
-        app: str, owner: str, public_key: str, secrets: list[str], entries: dict[str, str] | None = None
+        app: str,
+        owner: str,
+        public_key: str,
+        secrets: list[str],
+        entries: dict[str, str] | None = None,
+        dsn: str | None = None,
     ) -> str:
+        assert dsn == DSN, "the DSN ensure_glitchtip found goes into the deploy files"
         log.append(f"ensure_deploy_files {app} {owner}")
         return deploy
 
@@ -100,6 +114,7 @@ def onboard_activities(log: list[str], deploy: str, first_build: str | None):
 
     return [
         ensure_trust,
+        ensure_glitchtip,
         ensure_deploy_files,
         first_build_step,
         lock_out,
@@ -243,6 +258,7 @@ async def test_build_credentials_follow_the_repo_in_order(env: WorkflowEnvironme
         "ensure_zot_login echo",
         "ensure_runner_registration echo",
         "ensure_trust echo",
+        "ensure_glitchtip echo",
         "ensure_deploy_files echo mario",
         "first_build echo",
         "lock_out echo",

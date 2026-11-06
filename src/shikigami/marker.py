@@ -18,8 +18,10 @@ SECRETS_COMMENT = (
     "# Secrets from the request (D99): Janus wrote the values to OpenBao apps/meru/<app>/eso/env when the app was"
     " requested."
 )
+GLITCHTIP_COMMENT = "# Crash reports (D125): this app's GlitchTip project, which Shikigami made at onboarding."
 TITLE = "chore(deploy): {app} is a Meru app"  # Xolotl reads it back to know what to rebuild
 SET_KEYS = re.compile(r"^(externalSecrets|secretEnv):", re.MULTILINE)
+GLITCHTIP_SET = re.compile(r"^glitchtip:", re.MULTILINE)
 
 
 class BadTemplateError(Exception):
@@ -57,6 +59,18 @@ def env_name(secret: str) -> str:
     variable name and no two collide.
     """
     return secret.upper().replace("-", "_")
+
+
+def with_glitchtip(text: str, dsn: str | None) -> str:
+    """deploy/values.yaml with the app's GlitchTip DSN appended (D125).
+
+    Kept as is when there is no DSN, or the file already sets glitchtip: a restore (D106, the first onboarding wrote
+    it) or the owner's own.
+    """
+    if dsn is None or GLITCHTIP_SET.search(text):
+        return text
+    block = "\n".join(["", GLITCHTIP_COMMENT, "glitchtip:", f"  dsn: {dsn}"]) + "\n"
+    return (text if text.endswith("\n") else text + "\n") + block
 
 
 def with_secrets(text: str, secrets: list[str], path: str, entries: Mapping[str, str] | None = None) -> str:

@@ -914,6 +914,7 @@ def test_activity_names_are_the_ones_running_workflows_replay_against():
         "declare_apps",
         "ensure_repo",
         "ensure_trust",
+        "ensure_glitchtip",
         "ensure_deploy_files",
         "first_build",
         "lock_out",
