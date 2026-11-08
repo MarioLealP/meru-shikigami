@@ -66,9 +66,13 @@ class AppWorkflow:
                 OnboardBuild.run, action.app, id=f"onboard-build-{action.app}"
             )
             workflow.logger.info("app %s: build credentials ready, signing key %s", action.app, fingerprint(public_key))
+            trust_args: list = [action.app, action.description, public_key]
+            # D126, behind a patch: a pass already running on the old code replays with the old arguments.
+            if workflow.patched("environments"):
+                trust_args.append(action.environments)
             trust = await workflow.execute_activity_method(
                 Activities.ensure_trust,
-                args=[action.app, action.description, public_key],
+                args=trust_args,
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=RETRY,
             )

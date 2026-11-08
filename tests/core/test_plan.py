@@ -82,6 +82,17 @@ def test_names_moved_by_a_change_carry_their_entry():
     assert action.secret_entries == {"glitchtip-token": "env-20261105-a1b2c3"}  # env stays implicit
 
 
+def test_environments_are_carried_by_name_in_request_order():
+    spec = {"owner": "mario", "description": "a site", "environments": [{"name": "uat"}, {"name": "prod"}]}
+    request = App.model_validate(
+        {"apiVersion": "meru.clockmost.com/v1", "kind": "App", "metadata": {"name": "terapia"}, "spec": spec}
+    )
+    (action,) = plan({"terapia": request}, {})
+    assert action.environments == ["uat", "prod"]
+    (plain,) = plan({"echo": app("echo")}, {})
+    assert plain.environments == []
+
+
 @pytest.mark.parametrize("entry", ["env-", "env-2026-a1b2c3", "env-20261105-A1B2C3", "other", "env-20261105-a1b2c3/x"])
 def test_an_entry_has_to_be_env_or_a_change_name(entry: str):
     spec = {"owner": "mario", "description": "an app", "secrets": [{"name": "api-key", "entry": entry}]}

@@ -65,6 +65,31 @@ def test_a_kustomization_without_the_folder_is_a_bad_layout():
         trust.with_resource(KUSTOMIZATION, "exceptions", "exceptions/golem-build.yaml")
 
 
+def test_environments_widen_the_fence_to_their_namespaces():
+    made = yaml.safe_load(trust.fence("terapia", "a site", ["uat", "prod"]))
+    names = ["terapia", "terapia-build", "terapia-uat", "terapia-prod"]
+    assert [d["namespace"] for d in made["spec"]["destinations"]] == names
+    assert [k["name"] for k in made["spec"]["clusterResourceWhitelist"]] == names
+    assert all(
+        k == {"group": "", "kind": "Namespace", "name": k["name"]} for k in made["spec"]["clusterResourceWhitelist"]
+    )
+
+
+def test_a_fence_without_environments_is_the_same_text_as_before():
+    assert trust.fence("echo", "x", []) == trust.fence("echo", "x")
+    assert "into exactly its two namespaces, which it may also create" in trust.fence("echo", "x")
+
+
+def test_each_environment_trusts_the_apps_own_key():
+    added = trust.with_keys(KEYS, "golem", KEY, ["uat", "prod"])
+    data = yaml.safe_load(added)["data"]
+    assert list(data) == ["echo", "golem", "golem-uat", "golem-prod"]
+    assert data["golem"] == data["golem-uat"] == data["golem-prod"]
+    assert all(key_trusted(added, name, KEY) for name in ("golem", "golem-uat", "golem-prod"))
+    assert trust.with_keys(added, "golem", KEY, ["uat", "prod"]) == added  # kept
+    assert trust.with_keys(KEYS, "golem", KEY) == trust.with_key(KEYS, "golem", KEY)
+
+
 def test_a_key_is_added_and_the_file_keeps_its_comments():
     added = trust.with_key(KEYS, "golem", KEY)
     assert added.startswith(KEYS)
