@@ -30,6 +30,20 @@ The Pydantic models in `src/shikigami/models/request_format.py` are the definiti
 as JSON Schema, generated from them (a test fails if they drift). Everything optional has a default; fields such as
 `size: large`, `route.auth: none` or `exceptions` pause for an approval in the atlas.
 
+**Environments (D126).** An app may list further environments that run its image, never build their own:
+
+```yaml
+spec:
+  environments:
+    - name: uat # namespace <app>-uat, default host <app>-uat.clockmost.com
+    - name: prod
+      route: { host: terapia.clockmost.com }
+```
+
+The app itself (namespace `<app>`) is the first one and gets every build. Each environment pins a digest in
+`deploy/envs/<name>/values.yaml` of the app's repo; promoting is a PR copying a tested digest there. A `Database` with
+`environment: <name>` belongs to that environment (one per app or environment).
+
 ## How it runs
 
 One process per pod: a Temporal worker plus a small HTTP server. Replicas are identical - Temporal hands each task

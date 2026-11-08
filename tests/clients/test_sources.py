@@ -130,7 +130,7 @@ async def test_a_bad_proposal_gets_its_problems_with_paths_relative_to_the_repo(
 
 async def test_checks_across_files_count():
     verdict = await check({"apps/echo.yaml": ECHO}, "apps/golem.yaml", app_file("golem", host="echo.clockmost.com"))
-    assert verdict.problems == ["route.host echo.clockmost.com is used by 2 apps"]
+    assert verdict.problems == ["route.host echo.clockmost.com is used by 2 apps or environments"]
 
 
 async def test_problems_main_already_has_are_not_blamed_on_the_proposal():

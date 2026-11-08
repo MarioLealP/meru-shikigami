@@ -25,6 +25,8 @@ Days = Annotated[str, StringConstraints(pattern=r"^[1-9][0-9]{0,3}d$")]
 # The OpenBao entry under apps/meru/<app>/eso/ holding a secret's value: env when requested with the app (D99),
 # env-<yyyymmdd>-<6 hex> when a later change wrote it (D123) - Janus picks the name, the request records it.
 Entry = Annotated[str, StringConstraints(pattern=r"^env(-[0-9]{8}-[0-9a-f]{6})?$")]
+# An environment's name (D126): its namespace is <app>-<name>, so short; "build" is taken by the build namespace.
+EnvName = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9]{0,7}$")]
 Size = Literal["small", "medium", "large"]  # small 50m/64Mi/256Mi, medium 200m/256Mi/1Gi, large 1/1Gi/4Gi (approval)
 StorageClass = Literal["ssd", "hdd"]
 
@@ -97,6 +99,17 @@ class Secret(_Model):
     )
 
 
+class Environment(_Model):
+    """A further environment of the app (D126), e.g. uat or prod: namespace <app>-<name>, never built.
+
+    It runs the image the app's own builds made, pinned by digest in deploy/envs/<name>/values.yaml of the app's repo -
+    promoting is a PR that copies a tested digest there. The app itself (namespace <app>) is the first environment.
+    """
+
+    name: EnvName
+    route: Route = Field(default=Route(), description="Default host <app>-<name>.clockmost.com.")
+
+
 class AppSpec(_Model):
     """What an app asks for."""
 
@@ -116,6 +129,9 @@ class AppSpec(_Model):
     port: Annotated[int, Field(ge=1024, le=65535)] = 8080
     heartbeat: Annotated[str, StringConstraints(pattern=r"^/\S*$")] = "/heartbeat"
     exceptions: list[KyvernoException] = []
+    environments: list[Environment] = Field(
+        default=[], max_length=4, description="Further environments running this app's image (D126), e.g. uat, prod."
+    )
     retention: Days = "30d"
     removed: bool = Field(
         default=False, description="true = retire (D83): stopped and revoked now, purged after the retention."
@@ -126,6 +142,15 @@ class AppSpec(_Model):
         names = [s.name for s in self.secrets]
         if len(names) != len(set(names)):
             raise ValueError("each secret name only once")
+        return self
+
+    @model_validator(mode="after")
+    def _environment_names(self) -> Self:
+        names = [e.name for e in self.environments]
+        if len(names) != len(set(names)):
+            raise ValueError("each environment name only once")
+        if "build" in names:
+            raise ValueError("environment name build is taken: <app>-build is the build namespace")
         return self
 
     @model_validator(mode="after")
@@ -171,6 +196,9 @@ class DatabaseSpec(_Model):
     size: Size = "small"
     storage: DatabaseStorage
     app: Name = Field(description="The one app that gets the credentials: no shared databases.")
+    environment: EnvName | None = Field(
+        default=None, description="One of the app's environments (D126); none = the app itself."
+    )
     retention: Days = "30d"
     removed: bool = Field(default=False, description="true = retire (D83): purged after the retention.")
 

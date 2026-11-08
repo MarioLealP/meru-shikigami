@@ -85,11 +85,56 @@ def test_good_repo(tmp_path: Path) -> None:
         ({"apps/thoth.yaml": THOTH + "  removed: true\n"}, "the database isn't"),
         ({"notes.txt": "hi\n"}, "not a request"),
         ({"apps/sub/echo.yaml": ECHO}, "not a request"),
+        ({"apps/echo.yaml": ECHO + "  environments: [{name: uat}, {name: uat}]\n"}, "each environment name only once"),
+        ({"apps/echo.yaml": ECHO + "  environments: [{name: build}]\n"}, "build is taken"),
+        ({"apps/echo.yaml": ECHO + "  environments: [{name: Prod}]\n"}, "spec.environments.0.name"),
+        ({"apps/echo.yaml": ECHO + "  environments: [{name: production}]\n"}, "spec.environments.0.name"),
+        (
+            {"apps/echo.yaml": ECHO + "  environments: [{name: a}, {name: b}, {name: c}, {name: d}, {name: e}]\n"},
+            "spec.environments",
+        ),
+        (
+            {
+                "apps/echo.yaml": ECHO + "  environments: [{name: uat}]\n",
+                "apps/echo-uat.yaml": ECHO.replace("echo", "echo-uat"),
+            },
+            "would be namespace echo-uat",
+        ),
+        (
+            {"apps/echo.yaml": ECHO + "  environments: [{name: uat, route: {host: thoth.clockmost.com}}]\n"},
+            "used by 2 apps",
+        ),
+        (
+            {
+                "apps/echo.yaml": ECHO + "  environments: [{name: uat}]\n",
+                "apps/thoth.yaml": THOTH + "  route: {host: echo-uat.clockmost.com}\n",
+            },
+            "used by 2 apps",
+        ),
+        ({"databases/thoth.yaml": THOTH_DB + "  environment: uat\n"}, "isn't one of 'thoth'"),
+        (
+            {
+                "apps/thoth.yaml": THOTH + "  environments: [{name: uat}]\n",
+                "databases/thoth.yaml": THOTH_DB + "  environment: uat\n",
+                "databases/other.yaml": THOTH_DB.replace("name: thoth", "name: other", 1) + "  environment: uat\n",
+            },
+            "one database per app or environment",
+        ),
     ],
 )
 def test_rejects(tmp_path: Path, files: dict[str, str | None], expected: str) -> None:
     problems = check(repo(tmp_path, GOOD | files))
     assert any(expected in p for p in problems), problems
+
+
+def test_an_app_with_environments_and_a_database_each_is_valid(tmp_path: Path) -> None:
+    thoth = THOTH + "  environments: [{name: uat}, {name: prod, route: {host: cmdb.clockmost.com}}]\n"
+    files = {
+        "apps/thoth.yaml": thoth,
+        "databases/thoth-uat.yaml": THOTH_DB.replace("name: thoth", "name: thoth-uat", 1) + "  environment: uat\n",
+        "databases/thoth-prod.yaml": THOTH_DB.replace("name: thoth", "name: thoth-prod", 1) + "  environment: prod\n",
+    }
+    assert check(repo(tmp_path, GOOD | files)) == []
 
 
 def test_a_removed_app_with_its_removal_recorded_is_valid(tmp_path: Path) -> None:
