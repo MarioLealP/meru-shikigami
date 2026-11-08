@@ -102,6 +102,16 @@
           "title": "Exceptions",
           "type": "array"
         },
+        "environments": {
+          "default": [],
+          "description": "Further environments running this app's image (D126), e.g. uat, prod.",
+          "items": {
+            "$ref": "#/$defs/Environment"
+          },
+          "maxItems": 4,
+          "title": "Environments",
+          "type": "array"
+        },
         "retention": {
           "default": "30d",
           "pattern": "^[1-9][0-9]{0,3}d$",
@@ -120,6 +130,34 @@
         "description"
       ],
       "title": "AppSpec",
+      "type": "object"
+    },
+    "Environment": {
+      "additionalProperties": false,
+      "description": "A further environment of the app (D126), e.g. uat or prod: namespace <app>-<name>, never built.\n\nIt runs the image the app's own builds made, pinned by digest in deploy/envs/<name>/values.yaml of the app's repo -\npromoting is a PR that copies a tested digest there. The app itself (namespace <app>) is the first environment.",
+      "properties": {
+        "name": {
+          "pattern": "^[a-z][a-z0-9]{0,7}$",
+          "title": "Name",
+          "type": "string"
+        },
+        "route": {
+          "$ref": "#/$defs/Route",
+          "default": {
+            "host": null,
+            "auth": "authentik",
+            "access": [
+              "clockmost-admins"
+            ],
+            "enabled": true
+          },
+          "description": "Default host <app>-<name>.clockmost.com."
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "Environment",
       "type": "object"
     },
     "KyvernoException": {

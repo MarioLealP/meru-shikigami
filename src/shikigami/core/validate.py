@@ -70,17 +70,37 @@ def _across_files(apps: dict[str, App], databases: dict[str, Database]) -> list[
     """What's wrong between the requests, each file being fine on its own."""
     problems: list[str] = []
     for name, db in databases.items():
-        if db.spec.app not in apps:
+        app = apps.get(db.spec.app)
+        if app is None:
             problems.append(f"databases/{name}.yaml: spec.app {db.spec.app!r} has no apps/{db.spec.app}.yaml")
-        elif apps[db.spec.app].spec.removed and not db.spec.removed:
+        elif app.spec.removed and not db.spec.removed:
             # its credentials would outlive the app they're for: retire both together
             problems.append(f"databases/{name}.yaml: its app {db.spec.app!r} is removed, the database isn't")
-    for app, count in Counter(db.spec.app for db in databases.values()).items():
+        elif db.spec.environment and db.spec.environment not in {e.name for e in app.spec.environments}:
+            problems.append(
+                f"databases/{name}.yaml: spec.environment {db.spec.environment!r} isn't one of "
+                f"{db.spec.app!r}'s environments"
+            )
+    for (app, env), count in Counter((db.spec.app, db.spec.environment) for db in databases.values()).items():
         if count > 1:
-            problems.append(f"apps/{app}.yaml: {count} databases name it as spec.app - one database per app")
-    hosts = Counter(a.spec.route.host or f"{a.metadata.name}.clockmost.com" for a in apps.values())
-    problems += [f"route.host {host} is used by {n} apps" for host, n in hosts.items() if n > 1]
+            where = f"its environment {env!r}" if env else "it"
+            problems.append(f"apps/{app}.yaml: {count} databases name {where} - one database per app or environment")
+    hosts = Counter(_hosts(apps))
+    problems += [f"route.host {host} is used by {n} apps or environments" for host, n in hosts.items() if n > 1]
+    for name, app in apps.items():
+        for env in app.spec.environments:
+            if (namespace := f"{name}-{env.name}") in apps:
+                problems.append(f"apps/{name}.yaml: environment {env.name!r} would be namespace {namespace}, an app")
     return problems
+
+
+def _hosts(apps: dict[str, App]) -> list[str]:
+    """Every host the apps and their environments are reached at (D126: an environment's default <app>-<env>)."""
+    hosts = []
+    for name, app in apps.items():
+        hosts.append(app.spec.route.host or f"{name}.clockmost.com")
+        hosts += [env.route.host or f"{name}-{env.name}.clockmost.com" for env in app.spec.environments]
+    return hosts
 
 
 def check(repo: Path) -> list[str]:
