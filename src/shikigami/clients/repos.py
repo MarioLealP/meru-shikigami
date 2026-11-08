@@ -259,10 +259,24 @@ async def is_admin(http: httpx2.AsyncClient, gitea_url: str, token: str, org: st
     return permissions is not None and permissions.admin
 
 
-async def protect_main(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str) -> str:
-    """Branch protection on main: pushes as before (CI's digest commits), force push off - an append-only history.
+# D126 step 4: a change under an environment called prod - its digest, its database - merges only by a repo admin's
+# override (Mario). Gitea refuses it to everyone else on a PR merge, a scheduled auto-merge and a direct push alike;
+# uat and the rest stay the owner's. Set on every app: on one without a prod environment it matches nothing.
+PROD_FILES = "deploy/envs/prod/**"
 
-    Says what it did: added, force push turned off on an existing rule, or kept.
+
+def _with_prod_files(patterns: str) -> str:
+    """The rule's protected file patterns (`;`-separated, as Gitea keeps them) with the prod one added, if missing."""
+    kept = [p.strip() for p in patterns.split(";") if p.strip()]
+    return ";".join(kept if PROD_FILES in kept else [*kept, PROD_FILES])
+
+
+async def protect_main(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str) -> str:
+    """Branch protection on main: pushes as before (CI's digest commits), force push off, prod's files protected.
+
+    Force push off keeps the history append-only; PROD_FILES leaves prod to an admin's override (Mario).
+
+    Says what it did: added, an existing rule tightened, or kept.
     """
     base, headers = f"{gitea_url}/api/v1/repos/{org}/{repo}/branch_protections", {"Authorization": f"token {token}"}
     response = await http.get(base, headers=headers)
@@ -270,14 +284,34 @@ async def protect_main(http: httpx2.AsyncClient, gitea_url: str, token: str, org
     rule = next((r for r in response.json() if r.get("rule_name") == "main"), None)
     if rule is None:
         created = await http.post(
-            base, headers=headers, json={"rule_name": "main", "enable_push": True, "enable_force_push": False}
+            base,
+            headers=headers,
+            json={
+                "rule_name": "main",
+                "enable_push": True,
+                "enable_force_push": False,
+                "protected_file_patterns": PROD_FILES,
+            },
         )
         created.raise_for_status()
         return "added"
+    change: dict[str, object] = {}
     if rule.get("enable_force_push"):
-        (await http.patch(f"{base}/main", headers=headers, json={"enable_force_push": False})).raise_for_status()
-        return "force push turned off"
-    return "kept"
+        change["enable_force_push"] = False
+    patterns = rule.get("protected_file_patterns") or ""
+    if _with_prod_files(patterns) != patterns:
+        change["protected_file_patterns"] = _with_prod_files(patterns)
+    if not change:
+        return "kept"
+    (await http.patch(f"{base}/main", headers=headers, json=change)).raise_for_status()
+    return (
+        "tightened ("
+        + ", ".join(
+            {"enable_force_push": "force push off", "protected_file_patterns": "prod files protected"}[k]
+            for k in change
+        )
+        + ")"
+    )
 
 
 async def add_writer(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str, user: str) -> bool:

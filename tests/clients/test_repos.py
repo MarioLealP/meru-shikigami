@@ -116,29 +116,50 @@ async def test_admin_is_read_from_the_bots_permissions(admin: bool | None, expec
         assert await is_admin(http, "https://git.test", "tok", "Meru", "echo") is expected
 
 
-async def test_main_gets_a_rule_without_force_push():
+async def test_main_gets_a_rule_without_force_push_and_with_prod_files():
     seen: list[httpx2.Request] = []
     async with lock_out_gitea(True, [], set(), seen) as http:
         assert await protect_main(http, "https://git.test", "tok", "Meru", "echo") == "added"
     post = next(r for r in seen if r.method == "POST")
-    assert json.loads(post.content) == {"rule_name": "main", "enable_push": True, "enable_force_push": False}
+    assert json.loads(post.content) == {
+        "rule_name": "main",
+        "enable_push": True,
+        "enable_force_push": False,
+        "protected_file_patterns": "deploy/envs/prod/**",
+    }
 
 
-async def test_an_existing_rule_only_loses_force_push():
+@pytest.mark.parametrize(
+    ("rule", "change", "said"),
+    [
+        (
+            {"enable_force_push": True, "protected_file_patterns": "deploy/envs/prod/**"},
+            {"enable_force_push": False},
+            "tightened (force push off)",
+        ),
+        (
+            {"enable_force_push": False, "protected_file_patterns": ""},
+            {"protected_file_patterns": "deploy/envs/prod/**"},
+            "tightened (prod files protected)",
+        ),
+        (
+            {"enable_force_push": True, "protected_file_patterns": "LICENSE; "},
+            {"enable_force_push": False, "protected_file_patterns": "LICENSE;deploy/envs/prod/**"},
+            "tightened (force push off, prod files protected)",
+        ),
+    ],
+)
+async def test_an_existing_rule_is_only_tightened(rule: dict, change: dict, said: str):
     seen: list[httpx2.Request] = []
-    rules = [{"rule_name": "main", "enable_push": True, "enable_force_push": True}]
-    async with lock_out_gitea(True, rules, set(), seen) as http:
-        assert await protect_main(http, "https://git.test", "tok", "Meru", "echo") == "force push turned off"
+    async with lock_out_gitea(True, [{"rule_name": "main", "enable_push": True, **rule}], set(), seen) as http:
+        assert await protect_main(http, "https://git.test", "tok", "Meru", "echo") == said
     patch = next(r for r in seen if r.method == "PATCH")
-    assert (patch.url.path, json.loads(patch.content)) == (
-        "/api/v1/repos/Meru/echo/branch_protections/main",
-        {"enable_force_push": False},
-    )
+    assert (patch.url.path, json.loads(patch.content)) == ("/api/v1/repos/Meru/echo/branch_protections/main", change)
 
 
-async def test_a_rule_without_force_push_is_kept():
+async def test_a_tight_rule_is_kept():
     seen: list[httpx2.Request] = []
-    rules = [{"rule_name": "main", "enable_force_push": False}]
+    rules = [{"rule_name": "main", "enable_force_push": False, "protected_file_patterns": "a;deploy/envs/prod/**"}]
     async with lock_out_gitea(True, rules, set(), seen) as http:
         assert await protect_main(http, "https://git.test", "tok", "Meru", "echo") == "kept"
     assert [r.method for r in seen] == ["GET"]

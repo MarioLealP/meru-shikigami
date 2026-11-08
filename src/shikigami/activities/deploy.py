@@ -169,9 +169,9 @@ class DeployActivities(ActivityBase):
     async def lock_out(self, app: str) -> str:
         """The last onboarding step (D89), once the marker is in.
 
-        Protect main (force push off), give the merger Write, and drop Shikigami to Read - it can still propose (retire
-        PRs, cm-konk), never push. Kept once Shikigami isn't admin there any more - whoever made the repo or after it
-        stepped down.
+        Protect main (force push off; prod files only by Mario's override, D126), give the merger Write, and drop
+        Shikigami to Read - it can still propose (retire PRs, cm-konk), never push. Kept once Shikigami isn't admin
+        there any more - whoever made the repo or after it stepped down.
         """
         s = self.settings
         token, org = s.gitea_token.get_secret_value(), s.apps_org
