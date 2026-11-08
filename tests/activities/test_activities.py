@@ -481,9 +481,11 @@ def retiring(
     pulls: dict | None = None,
     public: dict | None = None,
     admin: bool = True,
+    argo_apps: dict[str, dict] | None = None,
 ) -> tuple[Activities, list[dict]]:
     """Activities over a fake Gitea (Meru/golem's files, its runners and archive flag, public trust repos + PR lists)
-    and a fake Kubernetes API holding app-golem (or not). `admin`: Shikigami still administers Meru/golem."""
+    and a fake Kubernetes API holding app-golem (or not) - or, with `argo_apps`, these Applications by name.
+    `admin`: Shikigami still administers Meru/golem."""
     calls: list[dict] = []
     repo = {"archived": False, "permissions": {"admin": admin}}
 
@@ -508,8 +510,11 @@ def retiring(
 
     def kubernetes(request: httpx2.Request) -> httpx2.Response:
         assert request.headers["authorization"] == "Bearer kube-token"
-        assert request.url.path == "/apis/argoproj.io/v1alpha1/namespaces/argocd/applications/app-golem"
-        return httpx2.Response(200, json=argo) if argo is not None else httpx2.Response(404, json={})
+        prefix = "/apis/argoproj.io/v1alpha1/namespaces/argocd/applications/"
+        assert request.url.path.startswith(prefix)
+        name = request.url.path.removeprefix(prefix)
+        found = (argo_apps or {}).get(name) if argo_apps is not None or name != "app-golem" else argo
+        return httpx2.Response(200, json=found) if found is not None else httpx2.Response(404, json={})
 
     http = httpx2.AsyncClient(transport=httpx2.MockTransport(gitea))
     kube = httpx2.AsyncClient(transport=httpx2.MockTransport(kubernetes))
@@ -626,6 +631,49 @@ async def test_runner_records_and_archiving_are_left_to_charon_without_admin(tmp
     assert calls == []
 
 
+GOLEM_ENV_VALUES = "owner: mario\nimage:\n  digest: sha256:abc\n"
+
+
+async def test_the_stop_turns_each_environment_off_too(tmp_path: Path):
+    files = {
+        "deploy/meru.yaml": GOLEM_MARKER,
+        "deploy/values.yaml": GOLEM_VALUES,
+        "deploy/envs/prod/values.yaml": GOLEM_ENV_VALUES,
+    }  # no deploy/envs/uat/values.yaml: an environment that never got its files deploys nothing
+    activities, calls = retiring(tmp_path, files)
+    assert await ActivityEnvironment().run(activities.retire_stop, "golem", ["uat", "prod"]) == "written"
+    (commit,) = calls
+    texts = {f["path"]: base64.b64decode(f["content"]).decode() for f in commit["files"]}
+    assert set(texts) == {"deploy/values.yaml", "deploy/meru.yaml", "deploy/envs/prod/values.yaml"}
+    assert texts["deploy/envs/prod/values.yaml"].startswith("owner: mario\nenabled: false")
+    activities, _ = retiring(tmp_path, texts)
+    assert await ActivityEnvironment().run(activities.retire_stop, "golem", ["uat", "prod"]) == "kept"
+    half = {**texts, "deploy/envs/prod/values.yaml": GOLEM_ENV_VALUES}  # the app stopped, prod still running
+    activities, calls = retiring(tmp_path, half)
+    assert await ActivityEnvironment().run(activities.retire_stop, "golem", ["uat", "prod"]) == "written"
+
+
+async def test_the_stop_pr_carries_the_environments(tmp_path: Path, monkeypatch):
+    opened = opened_prs(monkeypatch)
+    public = {**PUBLIC_GOLEM, "golem/raw/deploy/envs/prod/values.yaml": GOLEM_ENV_VALUES}
+    activities, _ = retiring(tmp_path, {}, public=public, admin=False)
+    assert await ActivityEnvironment().run(activities.retire_stop, "golem", ["prod"]) == "proposed in Meru/golem"
+    [pr] = opened
+    assert set(pr["files"]) == {"deploy/values.yaml", "deploy/meru.yaml", "deploy/envs/prod/values.yaml"}
+    assert "enabled: false" in pr["files"]["deploy/envs/prod/values.yaml"]
+
+
+async def test_waiting_for_argo_covers_each_environment(tmp_path: Path):
+    apps = {"app-golem": ARGO_STOPPED, "env-golem-prod": ARGO_RUNNING}
+    activities, _ = retiring(tmp_path, {}, argo_apps=apps)
+    with pytest.raises(ApplicationError, match="env-golem-prod not stopped yet"):
+        await ActivityEnvironment().run(activities.retire_wait_stopped, "golem", ["uat", "prod"])
+    activities, _ = retiring(tmp_path, {}, argo_apps={**apps, "env-golem-prod": ARGO_STOPPED})
+    assert await ActivityEnvironment().run(activities.retire_wait_stopped, "golem", ["uat", "prod"]) == "stopped"
+    activities, _ = retiring(tmp_path, {}, argo_apps={})
+    assert await ActivityEnvironment().run(activities.retire_wait_stopped, "golem", ["prod"]) == "gone"
+
+
 async def test_waiting_for_argo_retries_until_nothing_runs(tmp_path: Path):
     activities, _ = retiring(tmp_path, {}, argo=ARGO_RUNNING)
     with pytest.raises(ApplicationError, match="still has Deployment") as raised:
@@ -700,6 +748,22 @@ async def test_retiring_trust_proposes_three_removal_prs(tmp_path: Path, monkeyp
         "kustomization.yaml": TRUSTED_GOLEM["meru/raw/kustomization.yaml"],
     }
     assert keys["read"]["exceptions/golem-build.yaml"] == TRUSTED_GOLEM["kyverno/raw/exceptions/golem-build.yaml"]
+
+
+async def test_retiring_trust_removes_each_environments_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    opened: list[dict] = []
+
+    async def fake_open_pr(remote, user, token, topic, title, description, files, read, force=False):
+        opened.append({"title": title, "files": files})
+
+    monkeypatch.setattr("shikigami.activities.base.open_pr", fake_open_pr)
+    keys = TRUSTED_GOLEM["kyverno/raw/keys/meru-signing-keys.yaml"]
+    for name in ("golem-uat", "golem-prod"):
+        keys += f"  {name}: |\n    -----BEGIN PUBLIC KEY-----\n    GOLEM\n    -----END PUBLIC KEY-----\n"
+    activities, _ = retiring(tmp_path, {}, public={**TRUSTED_GOLEM, "kyverno/raw/keys/meru-signing-keys.yaml": keys})
+    await ActivityEnvironment().run(activities.retire_trust, "golem", ["uat", "prod"])
+    [left] = [pr["files"]["keys/meru-signing-keys.yaml"] for pr in opened if "signing key" in pr["title"]]
+    assert left == SIGNING_KEYS  # every key of golem's gone, everyone else's untouched
 
 
 async def test_a_restore_proposes_onboarding_again_after_a_merged_retire(monkeypatch: pytest.MonkeyPatch):
@@ -875,6 +939,16 @@ async def test_retire_marks_both_namespaces_with_the_requests_removed_at(tmp_pat
         "golem": {"meru.clockmost.com/removed-at": "2026-11-03T12:31:18Z"},  # UTC, as Xolotl stamps it
         "golem-build": {"keep": "me", "meru.clockmost.com/removed-at": "2026-11-03T12:31:18Z"},
     }
+
+
+async def test_retire_marks_the_environments_namespaces_too(tmp_path: Path):
+    cluster: dict[str, dict[str, str]] = {"golem": {}, "golem-build": {}, "golem-prod": {}}  # no golem-uat yet
+    activities = marking(tmp_path, cluster)
+    removed_at = datetime(2026, 11, 3, 12, 31, 18, tzinfo=UTC)
+    marked = await ActivityEnvironment().run(activities.retire_mark_namespaces, "golem", removed_at, ["uat", "prod"])
+    assert marked == ["golem", "golem-build", "golem-prod"]
+    assert await ActivityEnvironment().run(activities.restore_unmark_namespaces, "golem", ["uat", "prod"]) == marked
+    assert cluster == {"golem": {}, "golem-build": {}, "golem-prod": {}}
 
 
 async def test_a_missing_namespace_is_skipped_not_an_error(tmp_path: Path):

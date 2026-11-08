@@ -50,8 +50,14 @@ class AppWorkflow:
                 Activities.retire_mark, args=[action.app, "planned"], start_to_close_timeout=TIMEOUT, retry_policy=RETRY
             )
             workflow.logger.info("app %s: restore - Thoth %s", action.app, said)
+            unmark_args: list = [action.app]
+            if workflow.patched("retire-environments"):  # D126: the environments' namespaces too
+                unmark_args.append(action.environments)
             unmarked = await workflow.execute_activity_method(
-                Activities.restore_unmark_namespaces, action.app, start_to_close_timeout=TIMEOUT, retry_policy=RETRY
+                Activities.restore_unmark_namespaces,
+                args=unmark_args,
+                start_to_close_timeout=TIMEOUT,
+                retry_policy=RETRY,
             )
             workflow.logger.info("app %s: restore - removed-at off %s", action.app, unmarked or "(no namespace)")
         if action.kind != "retire" and action.template and action.description:
@@ -95,7 +101,7 @@ class AppWorkflow:
                 if deploy == "kept":  # marker in (Xolotl merged it, D99): the repo is the app's now (D89)
                     await self._first_build_then_lock_out(action.app)
         if action.kind == "retire" and action.template:  # removed by its request (D83); no request at all: dry run
-            await self._retire(action.app, action.removed_at)
+            await self._retire(action.app, action.removed_at, action.environments)
             return
         await workflow.execute_activity_method(
             Activities.dry_run, action, start_to_close_timeout=TIMEOUT, retry_policy=RETRY
@@ -113,17 +119,22 @@ class AppWorkflow:
         except WorkflowAlreadyStartedError:
             workflow.logger.info("app %s: first build still watched - lock-out follows it", app)
 
-    async def _retire(self, app: str, removed_at: datetime | None) -> None:
+    async def _retire(self, app: str, removed_at: datetime | None, environments: list[str]) -> None:
         """D85, in order.
 
         The stop must be applied before the Application goes - preserveResourcesOnDeletion would leave running pods
         behind - and the trust goes once nothing uses it. The repo is archived last. Thoth hears decommissioning at the
         start and retained once every step is done (only Anubis retires).
         """
+        # D126, behind a patch: a pass already running on the old code replays with the old arguments.
+        envs: list = [environments] if workflow.patched("retire-environments") else []
 
-        async def step(method, retry_policy: RetryPolicy = RETRY):  # method: an activity method
+        async def step(method, retry_policy: RetryPolicy = RETRY, with_envs: bool = False):  # an activity method
             return await workflow.execute_activity_method(
-                method, app, start_to_close_timeout=TIMEOUT, retry_policy=retry_policy
+                method,
+                args=[app, *(envs if with_envs else [])],
+                start_to_close_timeout=TIMEOUT,
+                retry_policy=retry_policy,
             )
 
         async def mark(status: str) -> None:
@@ -133,16 +144,18 @@ class AppWorkflow:
             workflow.logger.info("app %s: retire - Thoth %s", app, said)
 
         await mark("decommissioning")
-        stop = await step(Activities.retire_stop)
+        stop = await step(Activities.retire_stop, with_envs=True)
         workflow.logger.info("app %s: retire - stop %s", app, stop)
         if not (stop.startswith("kept") or stop == "written"):  # a PR (cm-konk): Xolotl's merge pings the next pass
             return
-        workflow.logger.info("app %s: retire - Argo %s", app, await step(Activities.retire_wait_stopped, WAIT_STOPPED))
+        workflow.logger.info(
+            "app %s: retire - Argo %s", app, await step(Activities.retire_wait_stopped, WAIT_STOPPED, with_envs=True)
+        )
         marker = await step(Activities.retire_park_marker)
         workflow.logger.info("app %s: retire - marker %s", app, marker)
         if marker not in ("kept", "parked"):  # a PR, as above
             return
-        workflow.logger.info("app %s: retire - %s", app, await step(Activities.retire_trust))
+        workflow.logger.info("app %s: retire - %s", app, await step(Activities.retire_trust, with_envs=True))
         workflow.logger.info("app %s: retire - %d runner(s) removed", app, await step(Activities.retire_runner))
         zot = await step(BuildActivities.revoke_zot_login)
         workflow.logger.info("app %s: retire - Zot login %s", app, "revoked" if zot else "already gone")
@@ -150,7 +163,7 @@ class AppWorkflow:
         workflow.logger.info("app %s: retire - repo %s", app, "archived" if archived else "not archived here")
         marked = await workflow.execute_activity_method(
             Activities.retire_mark_namespaces,
-            args=[app, removed_at],
+            args=[app, removed_at, *envs],
             start_to_close_timeout=TIMEOUT,
             retry_policy=RETRY,
         )

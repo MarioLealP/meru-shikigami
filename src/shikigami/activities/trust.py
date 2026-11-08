@@ -80,8 +80,11 @@ class TrustActivities(ActivityBase):
         return {"config.json": Edit(before=current, after=updated)} if updated != current else {}
 
     @activity.defn
-    async def retire_trust(self, app: str) -> str:
-        """Removal PRs for the fence, the key + build exception and the push rule - only this app's entries."""
+    async def retire_trust(self, app: str, environments: list[str] | None = None) -> str:
+        """Removal PRs for the fence, the keys + build exception and the push rule - only this app's entries.
+
+        The keys: the app's own and each environment's (D126) - one key trusted in every namespace of the app.
+        """
         org = self.settings.apps_org
         fence, exception = f"projects/{app}.yaml", f"exceptions/{app}-build.yaml"
         try:
@@ -96,7 +99,11 @@ class TrustActivities(ActivityBase):
                 }
             kyverno: dict[str, Edit] = {}
             keys = await self._required(org, "kyverno", "keys/meru-signing-keys.yaml")
-            if (fewer := trust.without_key(keys, app)) != keys:
+            fewer = keys
+            for name in trust.namespaces(app, environments or []):
+                if name != f"{app}-build":  # the build namespace has an exception, never a key
+                    fewer = trust.without_key(fewer, name)
+            if fewer != keys:
                 kyverno["keys/meru-signing-keys.yaml"] = Edit(before=keys, after=fewer)
             exception_text = await public_file(self.http, self.settings.gitea_url, org, "kyverno", exception)
             if exception_text is not None:
