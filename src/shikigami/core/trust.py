@@ -9,6 +9,7 @@ proposals.py.
 
 import json
 import re
+from collections.abc import Sequence
 
 import yaml
 
@@ -32,10 +33,24 @@ def title(app: str) -> str:
     return app[:1].upper() + app[1:]
 
 
-def fence(app: str, description: str) -> str:
-    """projects/<app>.yaml: its own repo plus the Nüwa and Sindri charts, into exactly its two namespaces."""
+def namespaces(app: str, environments: Sequence[str] = ()) -> list[str]:
+    """The app's namespaces: its own, its build's, then one per environment (D126) in the request's order."""
+    return [app, f"{app}-build", *(f"{app}-{env}" for env in environments)]
+
+
+def fence(app: str, description: str, environments: Sequence[str] = ()) -> str:
+    """projects/<app>.yaml: its own repo plus the Nüwa and Sindri charts, into exactly its namespaces."""
+    where = (
+        "into exactly its namespaces - the app's, its build's and its environments' (D126) -"
+        if environments
+        else "into exactly its two namespaces,"
+    )
+    destinations = "".join(
+        f"    - server: https://kubernetes.default.svc\n      namespace: {ns}\n" for ns in namespaces(app, environments)
+    )
+    kinds = "".join(f'    - {{ group: "", kind: Namespace, name: {ns} }}\n' for ns in namespaces(app, environments))
     return f"""# {title(app)}'s fence: where its Application may read from and deploy to - its own repo plus the
-# Nüwa and Sindri charts, into exactly its two namespaces, which it may also create. Written by Shikigami (D82).
+# Nüwa and Sindri charts, {where} which it may also create. Written by Shikigami (D82).
 apiVersion: argoproj.io/v1alpha1
 kind: AppProject
 metadata:
@@ -48,14 +63,8 @@ spec:
     - https://git.clockmost.com/Meru/nuwa.git
     - https://git.clockmost.com/Meru/sindri.git
   destinations:
-    - server: https://kubernetes.default.svc
-      namespace: {app}
-    - server: https://kubernetes.default.svc
-      namespace: {app}-build
-  clusterResourceWhitelist:
-    - {{ group: "", kind: Namespace, name: {app} }}
-    - {{ group: "", kind: Namespace, name: {app}-build }}
-"""
+{destinations}  clusterResourceWhitelist:
+{kinds}"""
 
 
 def build_exception(app: str) -> str:
@@ -120,6 +129,16 @@ def with_key(signing_keys: str, app: str, public_key: str) -> str:
     if not right:
         raise BadLayoutError("keys/meru-signing-keys.yaml: data isn't the last section - add the key by hand")
     return added
+
+
+def with_keys(signing_keys: str, app: str, public_key: str, environments: Sequence[str] = ()) -> str:
+    """with_key for the app, then for each environment's namespace <app>-<env> - the same key (D126).
+
+    An environment runs the app's own builds, promoted by digest, so its namespace trusts exactly the app's key.
+    """
+    for name in (app, *(f"{app}-{env}" for env in environments)):
+        signing_keys = with_key(signing_keys, name, public_key)
+    return signing_keys
 
 
 def push_rule(app: str) -> dict:

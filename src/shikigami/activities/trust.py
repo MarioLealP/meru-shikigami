@@ -13,17 +13,22 @@ class TrustActivities(ActivityBase):
     """The trust PRs into Meru/meru, Meru/kyverno and Meru/zot (D82)."""
 
     @activity.defn
-    async def ensure_trust(self, app: str, description: str, public_key: str) -> str:
+    async def ensure_trust(
+        self, app: str, description: str, public_key: str, environments: list[str] | None = None
+    ) -> str:
         """Propose the app's fence, signing key + build exception and push rule as PRs (D82).
 
         They go to Meru/meru, Meru/kyverno and Meru/zot - Shikigami only reads those repos. Each repo: kept if the app
         is already there, else one PR, never a second one while a PR with the same title exists (open, merged, or closed
         unmerged - a rejection isn't re-proposed). Another entry already there for the app is left for a person.
+        Environments (D126) widen the fence and trust the same key in each <app>-<env> namespace; `None` is a caller
+        from before them (a replayed workflow).
         """
+        environments = environments or []
         try:
             changes = [
-                ("fence", "meru", "fence", await self._fence_files(app, description)),
-                ("key", "kyverno", "signing key", await self._key_files(app, public_key)),
+                ("fence", "meru", "fence", await self._fence_files(app, description, environments)),
+                ("key", "kyverno", "signing key", await self._key_files(app, public_key, environments)),
                 ("push rule", "zot", "push rule", await self._push_rule_files(app)),
             ]
         except trust.BadLayoutError as e:
@@ -36,23 +41,25 @@ class TrustActivities(ActivityBase):
                 parts.append(f"{label} {await self._propose(app, repo, what, files)}")
         return await self._ping_merger("; ".join(parts))
 
-    async def _fence_files(self, app: str, description: str) -> dict[str, Edit]:
+    async def _fence_files(self, app: str, description: str, environments: list[str]) -> dict[str, Edit]:
         org, path = self.settings.apps_org, f"projects/{app}.yaml"
         if await public_file(self.http, self.settings.gitea_url, org, "meru", path) is not None:
             return {}
         kustomization = await self._required(org, "meru", "kustomization.yaml")
         return {
-            path: Edit(before=None, after=trust.fence(app, description)),
+            path: Edit(before=None, after=trust.fence(app, description, environments)),
             "kustomization.yaml": Edit(
                 before=kustomization, after=trust.with_resource(kustomization, "projects", path)
             ),
         }
 
-    async def _key_files(self, app: str, public_key: str) -> dict[str, Edit] | trust.ConflictError:
+    async def _key_files(
+        self, app: str, public_key: str, environments: list[str]
+    ) -> dict[str, Edit] | trust.ConflictError:
         org, exception = self.settings.apps_org, f"exceptions/{app}-build.yaml"
         current = await self._required(org, "kyverno", "keys/meru-signing-keys.yaml")
         try:
-            updated = trust.with_key(current, app, public_key)
+            updated = trust.with_keys(current, app, public_key, environments)
         except trust.ConflictError as e:
             return e
         files = {"keys/meru-signing-keys.yaml": Edit(before=current, after=updated)} if updated != current else {}

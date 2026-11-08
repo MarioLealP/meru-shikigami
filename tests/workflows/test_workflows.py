@@ -93,8 +93,8 @@ def onboard_activities(log: list[str], deploy: str, first_build: str | None):
         return "kept"
 
     @activity.defn(name="ensure_trust")
-    async def ensure_trust(app: str, description: str, public_key: str) -> str:
-        log.append(f"ensure_trust {app}")
+    async def ensure_trust(app: str, description: str, public_key: str, environments: list[str]) -> str:
+        log.append(f"ensure_trust {app}" + (f" {','.join(environments)}" if environments else ""))
         return "fence kept; key kept"
 
     @activity.defn(name="ensure_build_keys")
