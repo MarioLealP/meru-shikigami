@@ -11,7 +11,7 @@ from temporalio.service import RPCError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
-from shikigami.models.request_format import App
+from shikigami.models.request_format import App, Environment
 from shikigami.models.sync import AppAction, ExistingApp, RequestsSnapshot
 from shikigami.workflows.workflows import AppWorkflow, FirstBuild, OnboardBuild, RequestsSync, fingerprint
 
@@ -127,8 +127,8 @@ def onboard_activities(log: list[str], deploy: str, first_build: str | None):
 def retire_activities(log: list[str], retire: dict[str, object] | None):
     def retire_step(name: str, result):
         @activity.defn(name=name)
-        async def step(app: str):
-            log.append(f"{name} {app}")
+        async def step(app: str, environments: list[str] | None = None):
+            log.append(f"{name} {app}" + (f" envs={','.join(environments)}" if environments else ""))
             return result
 
         return step
@@ -151,13 +151,16 @@ def retire_activities(log: list[str], retire: dict[str, object] | None):
         return status
 
     @activity.defn(name="retire_mark_namespaces")
-    async def retire_mark_namespaces(app: str, removed_at: datetime | None) -> list[str]:
-        log.append(f"retire_mark_namespaces {app} {removed_at.isoformat() if removed_at else None}")
+    async def retire_mark_namespaces(
+        app: str, removed_at: datetime | None, environments: list[str] | None = None
+    ) -> list[str]:
+        envs = f" envs={','.join(environments)}" if environments else ""
+        log.append(f"retire_mark_namespaces {app} {removed_at.isoformat() if removed_at else None}{envs}")
         return [app]
 
     @activity.defn(name="restore_unmark_namespaces")
-    async def restore_unmark_namespaces(app: str) -> list[str]:
-        log.append(f"restore_unmark_namespaces {app}")
+    async def restore_unmark_namespaces(app: str, environments: list[str] | None = None) -> list[str]:
+        log.append(f"restore_unmark_namespaces {app}" + (f" envs={','.join(environments)}" if environments else ""))
         return [app]
 
     return [*retire_steps, retire_mark, retire_mark_namespaces, restore_unmark_namespaces]
@@ -329,6 +332,27 @@ async def test_a_removed_request_retires_in_order_and_onboards_nothing(env: Work
         "retire_mark golem retained",  # every step done: stopped, revoked, data kept until Charon
     ]
     assert done == []  # no dry run: the pass is real
+
+
+async def test_a_removed_app_with_environments_retires_them_with_it(env: WorkflowEnvironment):
+    removed_at = datetime(2026, 11, 3, 12, 31, 18, tzinfo=UTC)
+    golem = ECHO.model_copy(
+        update={
+            "metadata": ECHO.metadata.model_copy(update={"name": "golem", "removed_at": removed_at}),
+            "spec": ECHO.spec.model_copy(
+                update={"removed": True, "environments": [Environment(name="uat"), Environment(name="prod")]}
+            ),
+        }
+    )
+    snapshot = RequestsSnapshot(commit="c1", apps={"golem": golem}, databases={}, problems=[])
+    log: list[str] = []
+    await run_sync(env.client, snapshot, {"golem": ExistingApp(key="golem", status="active")}, log)
+    assert [line for line in log if line.startswith("retire_") and "envs=" in line] == [
+        "retire_stop golem envs=uat,prod",
+        "retire_wait_stopped golem envs=uat,prod",
+        "retire_trust golem envs=uat,prod",
+        "retire_mark_namespaces golem 2026-11-03T12:31:18+00:00 envs=uat,prod",
+    ]
 
 
 @pytest.mark.parametrize(

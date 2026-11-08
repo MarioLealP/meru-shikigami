@@ -23,29 +23,35 @@ class RetireActivities(ActivityBase):
     """Taking an app out of service, one safe-to-repeat step at a time."""
 
     @activity.defn
-    async def retire_stop(self, app: str) -> str:
-        """Stop the app: `enabled: false` (no workload) + `build: false` (no runner).
+    async def retire_stop(self, app: str, environments: list[str] | None = None) -> str:
+        """Stop the app: `enabled: false` (no workload) in its values and each environment's (D126) + `build: false`.
 
         One commit while Shikigami still administers the repo, else a PR Xolotl merges (cm-konk) - "proposed
-        in"/"waiting on" means the pass stops here until it's merged. Kept once both are there, or once the marker is
-        parked (a later pass).
+        in"/"waiting on" means the pass stops here until it's merged; one that stops prod waits for Mario (Gitea leaves
+        prod's files to his override, D126). Kept once all are there, or once the marker is parked (a later pass). An
+        environment without its values file deploys nothing and is skipped.
         """
         s = self.settings
         token, org = s.gitea_token.get_secret_value(), s.apps_org
         if not await is_admin(self.http, s.gitea_url, token, org, app):
-            return await self._ping_merger(await self._stop_pr(app))
+            return await self._ping_merger(await self._stop_pr(app, environments or []))
         marker_file = await read_file(self.http, s.gitea_url, token, org, app, "deploy/meru.yaml")
         if marker_file is None:
             return "kept (marker parked)"
         values = await read_file(self.http, s.gitea_url, token, org, app, "deploy/values.yaml")
         if values is None:
             raise ApplicationError(f"Meru/{app} has no deploy/values.yaml", non_retryable=True)
-        if retire.is_stopped(values[0], marker_file[0]):
+        envs = {}
+        for path in retire.env_values_paths(environments or []):
+            if (found := await read_file(self.http, s.gitea_url, token, org, app, path)) is not None:
+                envs[path] = found
+        if retire.is_stopped(values[0], marker_file[0]) and all(retire.is_disabled(v[0]) for v in envs.values()):
             return "kept"
         try:
             files = [
                 change("update", "deploy/values.yaml", retire.stopped_values(values[0]), sha=values[1]),
                 change("update", "deploy/meru.yaml", retire.stopped_marker(marker_file[0]), sha=marker_file[1]),
+                *(change("update", path, retire.stopped_values(v[0]), sha=v[1]) for path, v in envs.items()),
             ]
         except trust.BadLayoutError as e:
             raise ApplicationError(str(e), non_retryable=True) from e
@@ -56,19 +62,24 @@ class RetireActivities(ActivityBase):
         await commit_files(self.http, s.gitea_url, token, org, app, message, files)
         return "written"
 
-    async def _stop_pr(self, app: str) -> str:
+    async def _stop_pr(self, app: str, environments: list[str]) -> str:
         marker_text = await self._public(app, "deploy/meru.yaml")
         if marker_text is None:
             return "kept (marker parked)"
         values = await self._public(app, "deploy/values.yaml")
         if values is None:
             raise ApplicationError(f"Meru/{app} has no deploy/values.yaml", non_retryable=True)
-        if retire.is_stopped(values, marker_text):
+        envs = {}
+        for path in retire.env_values_paths(environments):
+            if (found := await self._public(app, path)) is not None:
+                envs[path] = found
+        if retire.is_stopped(values, marker_text) and all(retire.is_disabled(v) for v in envs.values()):
             return "kept"
         try:
             files = {
                 "deploy/values.yaml": Edit(before=values, after=retire.stopped_values(values)),
                 "deploy/meru.yaml": Edit(before=marker_text, after=retire.stopped_marker(marker_text)),
+                **{path: Edit(before=v, after=retire.stopped_values(v)) for path, v in envs.items()},
             }
         except trust.BadLayoutError as e:
             raise ApplicationError(str(e), non_retryable=True) from e
@@ -91,23 +102,25 @@ class RetireActivities(ActivityBase):
         return await self._open_once(app, title, [title, *again], f"retire-park-{app}", PARK.format(app=app), files)
 
     @activity.defn
-    async def retire_wait_stopped(self, app: str) -> str:
+    async def retire_wait_stopped(self, app: str, environments: list[str] | None = None) -> str:
         """Until Argo has synced the repo's current main with no workload left - retried by the workflow (30 s apart).
 
-        No Application = already parked and gone.
+        The app's Application and each environment's (env-<app>-<env>, D126). No Application = already parked and gone.
         """
         s = self.settings
         if self.kube is None:
             raise ApplicationError("no Kubernetes API client (kubernetesApi off?)", non_retryable=True)
-        found = await application(
-            self.kube, s.kubernetes_url, s.kubernetes_dir / "token", s.argocd_namespace, f"app-{app}"
-        )
-        if found is None:
+        names = [f"app-{app}", *(f"env-{app}-{env}" for env in environments or [])]
+        found = {
+            name: await application(self.kube, s.kubernetes_url, s.kubernetes_dir / "token", s.argocd_namespace, name)
+            for name in names
+        }
+        if all(found_app is None for found_app in found.values()):
             return "gone"
         commit = await head(self.http, s.gitea_url, None, s.apps_org, app)  # public: Shikigami may have left (D89)
-        reason = not_stopped(found, commit)
-        if reason:
-            raise ApplicationError(f"app-{app} not stopped yet: {reason}")
+        for name, found_app in found.items():
+            if found_app is not None and (reason := not_stopped(found_app, commit)):
+                raise ApplicationError(f"{name} not stopped yet: {reason}")
         return "stopped"
 
     @activity.defn
@@ -158,18 +171,22 @@ class RetireActivities(ActivityBase):
         token = await self.thoth_tokens.get()
         return await mark_retire_step(self.http, self.settings.thoth_url, token, app, status)
 
-    async def _set_removed_at(self, app: str, value: str | None) -> list[str]:
-        """The app's two namespaces, `<app>` and `<app>-build`; returns the ones that exist (and were set)."""
+    async def _set_removed_at(self, app: str, value: str | None, environments: list[str]) -> list[str]:
+        """The app's namespaces - `<app>`, `<app>-build`, each `<app>-<env>` (D126); returns the ones that exist."""
         s = self.settings
         if self.kube is None:
             raise ApplicationError("no Kubernetes API client (kubernetesApi off?)", non_retryable=True)
         token = s.kubernetes_dir / "token"
         return [
-            ns for ns in (app, f"{app}-build") if await set_removed_at(self.kube, s.kubernetes_url, token, ns, value)
+            ns
+            for ns in trust.namespaces(app, environments)
+            if await set_removed_at(self.kube, s.kubernetes_url, token, ns, value)
         ]
 
     @activity.defn
-    async def retire_mark_namespaces(self, app: str, removed_at: datetime | None) -> list[str]:
+    async def retire_mark_namespaces(
+        self, app: str, removed_at: datetime | None, environments: list[str] | None = None
+    ) -> list[str]:
         """Charon step 1 (D107): put the request's removedAt on the app's namespaces.
 
         Charon deletes only marked ones, after its own 30 days. Last before Thoth hears retained: a marked namespace is
@@ -179,15 +196,15 @@ class RetireActivities(ActivityBase):
             raise ApplicationError(
                 f"{app}'s request has no removedAt - Xolotl stamps it on the removal merge", non_retryable=True
             )
-        return await self._set_removed_at(app, stamp(removed_at))
+        return await self._set_removed_at(app, stamp(removed_at), environments or [])
 
     @activity.defn
-    async def restore_unmark_namespaces(self, app: str) -> list[str]:
+    async def restore_unmark_namespaces(self, app: str, environments: list[str] | None = None) -> list[str]:
         """A restore (D106): the mark comes off first, so Charon never deletes a restored app's namespaces.
 
         Argo doesn't remove an annotation it didn't write - this does.
         """
-        return await self._set_removed_at(app, None)
+        return await self._set_removed_at(app, None, environments or [])
 
     @activity.defn
     async def retire_archive(self, app: str) -> bool:

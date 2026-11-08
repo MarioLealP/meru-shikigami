@@ -4,6 +4,7 @@ Pure text work on the two deploy files, keeping their comments; the Gitea and Ar
 """
 
 import re
+from collections.abc import Sequence
 
 from shikigami.core.trust import BadLayoutError
 
@@ -35,11 +36,19 @@ def stopped_marker(marker: str) -> str:
     return BUILD.sub("build: false # retired (D85): no build namespace or runner", marker, count=1)
 
 
+def env_values_paths(environments: Sequence[str]) -> list[str]:
+    """Each environment's values file (D126) - what the stop turns off besides the app's own."""
+    return [f"deploy/envs/{env}/values.yaml" for env in environments]
+
+
+def is_disabled(values: str) -> bool:
+    """Whether a values file already says `enabled: false`."""
+    return bool(re.search(r"^enabled: false\b", values, re.MULTILINE))
+
+
 def is_stopped(values: str, marker: str) -> bool:
     """Whether both the values file and the marker already say stopped."""
-    return bool(re.search(r"^enabled: false\b", values, re.MULTILINE)) and bool(
-        re.search(r"^build: false\b", marker, re.MULTILINE)
-    )
+    return is_disabled(values) and bool(re.search(r"^build: false\b", marker, re.MULTILINE))
 
 
 def restarted_values(values: str) -> str:
