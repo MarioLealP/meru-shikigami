@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### Added
+- The lock-out also gives `renovate-bot` (`renovate_user`) Write when the repo carries a `renovate.json`: Renovate
+  scans only the Meru repos that opt in that way and pushes its branches itself (cm-1rpd, host binaries first).
 - The retire pass (D85) for a request marked removed, in order, each step keeping what's done: stop commit
   (`enabled: false` + `build: false`) -> wait until Argo CD has synced it with no workload left (read-only, 30 s
   checks for 15 min) -> park the marker back to `deploy/meru.yaml.in` (the ApplicationSet drops the app; onboarding

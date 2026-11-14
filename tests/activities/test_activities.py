@@ -777,14 +777,21 @@ async def test_a_restore_proposes_onboarding_again_after_a_merged_retire(monkeyp
     assert result.startswith("fence proposed in Meru/meru")  # not "Meru/meru#21 merged, not on main yet"
 
 
-def locking(admin: bool, users: set[str]) -> tuple[Activities, list[tuple[str, str]]]:
-    """Activities over a fake Gitea where Shikigami is (or isn't) admin of Meru/echo; records every write."""
+def locking(admin: bool, users: set[str], renovate: bool = False) -> tuple[Activities, list[tuple[str, str]]]:
+    """Activities over a fake Gitea where Shikigami is (or isn't) admin of Meru/echo; records every write.
+
+    renovate: the repo carries a renovate.json.
+    """
     writes: list[tuple[str, str]] = []
 
     def gitea(request: httpx2.Request) -> httpx2.Response:
         path = request.url.path
         if request.method == "GET" and path == "/api/v1/repos/Meru/echo":
             return httpx2.Response(200, json={"permissions": {"admin": admin}})
+        if request.method == "GET" and path == "/api/v1/repos/Meru/echo/contents/renovate.json":
+            if not renovate:
+                return httpx2.Response(404, json={})
+            return httpx2.Response(200, json={"content": base64.b64encode(b"{}").decode(), "sha": "abc"})
         if request.method == "GET" and path.endswith("/branch_protections"):
             return httpx2.Response(200, json=[])
         if request.method == "GET" and path.startswith("/api/v1/users/"):
@@ -799,6 +806,7 @@ def locking(admin: bool, users: set[str]) -> tuple[Activities, list[tuple[str, s
         gitea_token=SecretStr("tok"),
         gitea_user="shikigami",
         merger_user="xolotl",
+        renovate_user="renovate-bot",
         apps_org="Meru",
     )
     return Activities(settings=settings, http=http, thoth_tokens=tokens), writes
@@ -812,6 +820,18 @@ async def test_lock_out_protects_hands_over_and_leaves_in_that_order():
     assert writes == [
         ("POST", "/branch_protections"),
         ("PUT", "/collaborators/xolotl"),
+        ("PUT", "/collaborators/shikigami"),
+    ]
+
+
+async def test_lock_out_gives_renovate_write_when_the_repo_opts_in():
+    activities, writes = locking(admin=True, users={"xolotl", "renovate-bot"}, renovate=True)
+    result = await ActivityEnvironment().run(activities.lock_out, "echo")
+    assert result == ("main protection added, xolotl given Write, renovate-bot given Write, Shikigami down to Read")
+    assert writes == [
+        ("POST", "/branch_protections"),
+        ("PUT", "/collaborators/xolotl"),
+        ("PUT", "/collaborators/renovate-bot"),
         ("PUT", "/collaborators/shikigami"),
     ]
 
