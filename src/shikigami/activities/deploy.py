@@ -169,16 +169,22 @@ class DeployActivities(ActivityBase):
     async def lock_out(self, app: str) -> str:
         """The last onboarding step (D89), once the marker is in.
 
-        Protect main (force push off; prod files only by Mario's override, D126), give the merger Write, and drop
-        Shikigami to Read - it can still propose (retire PRs, cm-konk), never push. Kept once Shikigami isn't admin
-        there any more - whoever made the repo or after it stepped down.
+        Protect main (force push off; prod files only by Mario's override, D126), give the merger Write - and Renovate
+        too when the repo carries a renovate.json (cm-1rpd: Renovate scans only the Meru repos that opt in that way, and
+        it pushes its branches itself) - and drop Shikigami to Read - it can still propose (retire PRs, cm-konk), never
+        push. Kept once Shikigami isn't admin there any more - whoever made the repo or after it stepped down.
         """
         s = self.settings
         token, org = s.gitea_token.get_secret_value(), s.apps_org
         if not await is_admin(self.http, s.gitea_url, token, org, app):
             return "kept"
         protected = await protect_main(self.http, s.gitea_url, token, org, app)
-        merger = await add_writer(self.http, s.gitea_url, token, org, app, s.merger_user)
+        said = [f"main protection {protected}"]
+        writers = [s.merger_user]
+        if await read_file(self.http, s.gitea_url, token, org, app, "renovate.json") is not None:
+            writers.append(s.renovate_user)
+        for user in writers:
+            added = await add_writer(self.http, s.gitea_url, token, org, app, user)
+            said.append(f"{user} {'given Write' if added else 'skipped (no such user yet)'}")
         await become_reader(self.http, s.gitea_url, token, org, app, s.gitea_user)
-        added = "given Write" if merger else "skipped (no such user yet)"
-        return f"main protection {protected}, {s.merger_user} {added}, Shikigami down to Read"
+        return ", ".join([*said, "Shikigami down to Read"])
