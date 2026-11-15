@@ -30,7 +30,7 @@ class BuildActivities(BaseModel):
     async def ensure_build_keys(self, app: str) -> str:
         """apps/meru/<app>-build/build: the Zot login + cosign key Sindri's build jobs read.
 
-        Returns the public key (it goes into Meru/kyverno's trusted keys).
+        Returns the public key (the apps' CI signs with the private half; nothing verifies it since Kyverno went).
         """
         path = f"meru/{app}-build/build"
         entry = await self.kv.read(path)

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Removed
+- The signing key + build exception in Meru/kyverno (Mario 2026-11-15 dropped Kyverno): onboarding proposes the fence
+  and the push rule only, retiring removes only those, and the marker no longer waits for Meru/kyverno to trust the
+  key. The request's `exceptions` field goes too (nothing acted on it; no request used it). `ensure_trust` and
+  `ensure_deploy` keep their `public_key` argument so workflows started before still replay.
+
 ### Added
 - The lock-out also gives `renovate-bot` (`renovate_user`) Write when the repo carries a `renovate.json`: Renovate
   scans only the Meru repos that opt in that way and pushes its branches itself (cm-1rpd, host binaries first).

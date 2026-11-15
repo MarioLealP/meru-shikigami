@@ -85,4 +85,4 @@ def main() -> None:
     parser.add_argument("app")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    print(asyncio.run(run(args.app)), end="")  # the cosign public key, for Meru/kyverno
+    print(asyncio.run(run(args.app)), end="")  # the cosign public key

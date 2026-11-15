@@ -75,7 +75,10 @@ def test_good_repo(tmp_path: Path) -> None:
         ({"apps/echo.yaml": ECHO + "  template: nuwa/upstream\n"}, "image is required"),
         ({"apps/echo.yaml": ECHO + "  image: nginx\n"}, "image is required"),
         ({"apps/echo.yaml": ECHO + "  route: {host: echo.example.com}\n"}, "spec.route.host"),
-        ({"apps/echo.yaml": ECHO + "  exceptions: [{kind: privileged, reason: x}]\n"}, "spec.exceptions.0.reason"),
+        (
+            {"apps/echo.yaml": ECHO + "  exceptions: [{kind: privileged, reason: long enough}]\n"},
+            "spec.exceptions",
+        ),  # gone with Kyverno
         ({"apps/echo.yaml": ECHO + "  storage: [{name: data, size: 1Gi, mountPath: /data}]\n"}, "class"),
         ({"apps/echo.yaml": "a: [\n"}, "not YAML"),
         ({"apps/thoth.yaml": None}, "has no apps/thoth.yaml"),

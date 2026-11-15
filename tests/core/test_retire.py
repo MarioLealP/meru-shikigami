@@ -51,16 +51,6 @@ def test_parking_gives_back_what_onboarding_turns_into_a_marker():
 
 
 def test_removals_undo_what_onboarding_added():
-    keys = (
-        "data:\n  echo: |\n    -----BEGIN PUBLIC KEY-----\n    AAAA\n    -----END PUBLIC KEY-----\n"
-        "  thoth: |\n    -----BEGIN PUBLIC KEY-----\n    BBBB\n    -----END PUBLIC KEY-----\n"
-    )
-    key = "-----BEGIN PUBLIC KEY-----\nGOLEM\n-----END PUBLIC KEY-----\n"
-    assert trust.without_key(trust.with_key(keys, "golem", key), "golem") == keys
-    assert trust.without_key(keys, "echo") == (
-        "data:\n  thoth: |\n    -----BEGIN PUBLIC KEY-----\n    BBBB\n    -----END PUBLIC KEY-----\n"
-    )
-    assert trust.without_key(keys, "golem") == keys  # nothing to remove
     kustomization = "resources:\n  - projects/echo.yaml\n  - appsets/meru-apps.yaml\n"
     added = trust.with_resource(kustomization, "projects", "projects/golem.yaml")
     assert trust.without_resource(added, "projects/golem.yaml") == kustomization

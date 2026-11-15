@@ -78,13 +78,6 @@ class Volume(_Model):
     mount_path: Annotated[str, StringConstraints(pattern=r"^/\S*$")] = Field(alias="mountPath")
 
 
-class KyvernoException(_Model):
-    """A Kyverno exception for this app's pods. Always needs approval."""
-
-    kind: Literal["runAsRoot", "privileged", "hostNetwork", "hostPath"]
-    reason: Annotated[str, StringConstraints(min_length=10, max_length=300)]
-
-
 class Secret(_Model):
     """One environment variable from OpenBao (D99): `discord-token` -> DISCORD_TOKEN.
 
@@ -128,7 +121,6 @@ class AppSpec(_Model):
     replicas: Annotated[int, Field(ge=1, le=3)] = 1
     port: Annotated[int, Field(ge=1024, le=65535)] = 8080
     heartbeat: Annotated[str, StringConstraints(pattern=r"^/\S*$")] = "/heartbeat"
-    exceptions: list[KyvernoException] = []
     environments: list[Environment] = Field(
         default=[], max_length=4, description="Further environments running this app's image (D126), e.g. uat, prod."
     )

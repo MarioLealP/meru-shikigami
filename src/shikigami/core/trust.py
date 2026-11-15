@@ -1,8 +1,8 @@
 """An app's trust files (D82).
 
-Its fence in Meru/meru, its signing key + build exception in Meru/kyverno, and its push rule in Meru/zot. All derived -
-the request picks none of it: the fence is the one shape every app has (Meru/meru's scripts/fences.py checks it), the
-key is the one OnboardBuild made, the push rule lets only its builder push. Shikigami only ever adds an app; an existing
+Its fence in Meru/meru and its push rule in Meru/zot (the signing key + build exception in Meru/kyverno went with
+Kyverno, 2026-11-15). All derived - the request picks none of it: the fence is the one shape every app has (Meru/meru's
+scripts/fences.py checks it), the push rule lets only its builder push. Shikigami only ever adds an app; an existing
 entry is never changed here. Text work that keeps each file's layout (and the YAML files' comments); the git side is in
 proposals.py.
 """
@@ -11,10 +11,7 @@ import json
 import re
 from collections.abc import Sequence
 
-import yaml
-
 from shikigami.core.build_creds import builder
-from shikigami.core.marker import key_trusted
 
 
 class BadLayoutError(Exception):
@@ -67,29 +64,6 @@ spec:
 {kinds}"""
 
 
-def build_exception(app: str) -> str:
-    """exceptions/<app>-build.yaml: its build namespace may be Pod Security baseline (rootless BuildKit), no more."""
-    return f"""apiVersion: policies.kyverno.io/v1
-kind: PolicyException
-metadata:
-  name: {app}-build
-  namespace: kyverno
-  annotations:
-    meru.clockmost.com/reason: >-
-      {title(app)}'s build namespace (D32). Its job pods run rootless BuildKit, which needs privilege escalation,
-      SETUID/SETGID, SELinux container_engine_t and a custom seccomp profile - Pod Security "baseline", not
-      "restricted". Its check pods and the app (namespace {app}) stay restricted. Every other rule still applies.
-      Written by Shikigami (D82).
-spec:
-  policyRefs:
-    - name: require-restricted-namespaces
-      kind: ValidatingPolicy
-  matchConditions:
-    - name: {app}-build-namespace-only
-      expression: "object.metadata.name == '{app}-build'"
-"""
-
-
 def with_resource(kustomization: str, folder: str, path: str) -> str:
     """The kustomization with `- <path>` listed after the last entry from the same folder (kept if already there)."""
     if re.search(rf"^  - {re.escape(path)}$", kustomization, re.MULTILINE):
@@ -104,41 +78,6 @@ def with_resource(kustomization: str, folder: str, path: str) -> str:
 def without_resource(kustomization: str, path: str) -> str:
     """The kustomization without its `- <path>` line (kept if it isn't listed)."""
     return re.sub(rf"^  - {re.escape(path)}\n", "", kustomization, count=1, flags=re.MULTILINE)
-
-
-def with_key(signing_keys: str, app: str, public_key: str) -> str:
-    """The signing-keys ConfigMap with the app's key added at the end of `data` (the file's last section).
-
-    Kept if it already trusts exactly this key; another key for the app raises ConflictError.
-    """
-    data = (yaml.safe_load(signing_keys) or {}).get("data")
-    if not isinstance(data, dict):
-        raise BadLayoutError("keys/meru-signing-keys.yaml: no data section")
-    if app in data:
-        if key_trusted(signing_keys, app, public_key):
-            return signing_keys
-        raise ConflictError(f"Meru/kyverno already trusts another key for {app}")
-    lines = [line.strip() for line in public_key.strip().splitlines() if line.strip()]
-    block = f"  {app}: |\n" + "".join(f"    {line}\n" for line in lines)
-    added = signing_keys.rstrip("\n") + "\n" + block
-    # the text append is only right while data is the last section: check the result says what we meant
-    try:
-        right = key_trusted(added, app, public_key) and len(yaml.safe_load(added)["data"]) == len(data) + 1
-    except yaml.YAMLError:
-        right = False
-    if not right:
-        raise BadLayoutError("keys/meru-signing-keys.yaml: data isn't the last section - add the key by hand")
-    return added
-
-
-def with_keys(signing_keys: str, app: str, public_key: str, environments: Sequence[str] = ()) -> str:
-    """with_key for the app, then for each environment's namespace <app>-<env> - the same key (D126).
-
-    An environment runs the app's own builds, promoted by digest, so its namespace trusts exactly the app's key.
-    """
-    for name in (app, *(f"{app}-{env}" for env in environments)):
-        signing_keys = with_key(signing_keys, name, public_key)
-    return signing_keys
 
 
 def push_rule(app: str) -> dict:
@@ -169,20 +108,6 @@ def with_push_rule(config: str, app: str) -> str:
         raise ConflictError(f"Meru/zot already has another rule for {repo}")
     repositories[repo] = push_rule(app)
     return json.dumps(parsed, indent=2) + "\n"
-
-
-def without_key(signing_keys: str, app: str) -> str:
-    """The signing-keys ConfigMap without the app's key block; every other key stays exactly as it was."""
-    data = (yaml.safe_load(signing_keys) or {}).get("data")
-    if not isinstance(data, dict):
-        raise BadLayoutError("keys/meru-signing-keys.yaml: no data section")
-    if app not in data:
-        return signing_keys
-    removed = re.sub(rf"^  {re.escape(app)}: \|\n(?:    [^\n]*\n)*", "", signing_keys, count=1, flags=re.MULTILINE)
-    left = (yaml.safe_load(removed) or {}).get("data") or {}
-    if app in left or left != {name: key for name, key in data.items() if name != app}:
-        raise BadLayoutError(f"keys/meru-signing-keys.yaml: {app}'s key isn't one plain block - remove it by hand")
-    return removed
 
 
 def without_push_rule(config: str, app: str) -> str:

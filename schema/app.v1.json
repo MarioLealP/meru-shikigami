@@ -94,14 +94,6 @@
           "title": "Heartbeat",
           "type": "string"
         },
-        "exceptions": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/KyvernoException"
-          },
-          "title": "Exceptions",
-          "type": "array"
-        },
         "environments": {
           "default": [],
           "description": "Further environments running this app's image (D126), e.g. uat, prod.",
@@ -158,34 +150,6 @@
         "name"
       ],
       "title": "Environment",
-      "type": "object"
-    },
-    "KyvernoException": {
-      "additionalProperties": false,
-      "description": "A Kyverno exception for this app's pods. Always needs approval.",
-      "properties": {
-        "kind": {
-          "enum": [
-            "runAsRoot",
-            "privileged",
-            "hostNetwork",
-            "hostPath"
-          ],
-          "title": "Kind",
-          "type": "string"
-        },
-        "reason": {
-          "maxLength": 300,
-          "minLength": 10,
-          "title": "Reason",
-          "type": "string"
-        }
-      },
-      "required": [
-        "kind",
-        "reason"
-      ],
-      "title": "KyvernoException",
       "type": "object"
     },
     "Metadata": {
