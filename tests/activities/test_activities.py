@@ -63,7 +63,6 @@ async def test_a_git_url_template_is_not_retried():
 
 TEMPLATE_IN = 'owner: ""\nchart: nuwa-app-0.7.0\nbuild: true\n'
 VALUES = 'name: echo\nowner: "" # from the request\n'
-SIGNING_KEYS = "data:\n  echo: |\n    -----BEGIN PUBLIC KEY-----\n    AAAA\n    -----END PUBLIC KEY-----\n"
 PUBLIC_KEY = "-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\n"
 
 
@@ -143,7 +142,7 @@ def gitea(
     return Activities(settings=settings, http=http, thoth_tokens=tokens)
 
 
-READY = {"meru/raw/projects/echo.yaml": "kind: AppProject\n", "kyverno/raw/keys/meru-signing-keys.yaml": SIGNING_KEYS}
+READY = {"meru/raw/projects/echo.yaml": "kind: AppProject\n"}
 
 
 async def deploy(
@@ -270,18 +269,10 @@ async def test_a_marker_in_a_repo_the_bot_cant_see_still_counts():
     assert await deploy(files, {**READY, "echo/raw/deploy/meru.yaml": "owner: mario\n"}, hidden=True) == ("kept", [])
 
 
-@pytest.mark.parametrize(
-    ("public", "why"),
-    [
-        ({"kyverno/raw/keys/meru-signing-keys.yaml": SIGNING_KEYS}, "no fence"),
-        ({"meru/raw/projects/echo.yaml": "x"}, "signing key"),
-        ({**READY, "kyverno/raw/keys/meru-signing-keys.yaml": SIGNING_KEYS.replace("AAAA", "ZZZZ")}, "signing key"),
-    ],
-)
-async def test_waits_for_the_fence_and_the_key(public: dict[str, str], why: str):
-    result, commits = await deploy({"deploy/meru.yaml.in": TEMPLATE_IN, "deploy/values.yaml": VALUES}, public)
+async def test_waits_for_the_fence():
+    result, commits = await deploy({"deploy/meru.yaml.in": TEMPLATE_IN, "deploy/values.yaml": VALUES}, {})
     assert result.startswith("waiting")
-    assert why in result
+    assert "no fence" in result
     assert commits == []
 
 
@@ -300,8 +291,6 @@ async def test_a_template_without_the_owner_line_is_not_retried():
 GOLEM_KEY = "-----BEGIN PUBLIC KEY-----\nGOLEM\n-----END PUBLIC KEY-----\n"
 TRUST_REPOS = {
     "meru/raw/kustomization.yaml": "resources:\n  - projects/echo.yaml\n  - appsets/meru-apps.yaml\n",
-    "kyverno/raw/kustomization.yaml": "resources:\n  - keys/meru-signing-keys.yaml\n  - exceptions/echo-build.yaml\n",
-    "kyverno/raw/keys/meru-signing-keys.yaml": SIGNING_KEYS,
     "zot/raw/config.json": (Path(__file__).parent.parent / "fixtures" / "zot-config.json").read_text(),
 }
 
@@ -353,8 +342,8 @@ async def onboard_trust(
 
 
 async def test_a_new_app_gets_one_pr_per_trust_repo(monkeypatch: pytest.MonkeyPatch):
-    result, [fence, keys, push] = await onboard_trust(monkeypatch, TRUST_REPOS, {})
-    assert result == "fence proposed in Meru/meru; key proposed in Meru/kyverno; push rule proposed in Meru/zot"
+    result, [fence, push] = await onboard_trust(monkeypatch, TRUST_REPOS, {})
+    assert result == "fence proposed in Meru/meru; push rule proposed in Meru/zot"
     assert PINGS == ["POST /ping"]  # once per pass, not per PR
     assert (push["remote"], push["title"]) == (
         "https://git.test/Meru/zot.git",
@@ -374,36 +363,28 @@ async def test_a_new_app_gets_one_pr_per_trust_repo(monkeypatch: pytest.MonkeyPa
     assert fence["title"] == "chore(trust): onboard golem - fence"
     assert set(fence["files"]) == {"projects/golem.yaml", "kustomization.yaml"}
     assert "  - projects/golem.yaml\n" in fence["files"]["kustomization.yaml"]
-    assert keys["title"] == "chore(trust): onboard golem - signing key"
-    assert set(keys["files"]) == {"keys/meru-signing-keys.yaml", "exceptions/golem-build.yaml", "kustomization.yaml"}
-    assert keys["files"]["keys/meru-signing-keys.yaml"].endswith(
-        "  golem: |\n    -----BEGIN PUBLIC KEY-----\n    GOLEM\n    -----END PUBLIC KEY-----\n"
-    )
 
 
 async def test_an_app_already_trusted_is_kept_without_a_pr(monkeypatch: pytest.MonkeyPatch):
     public = {
         **TRUST_REPOS,
         "meru/raw/projects/echo.yaml": "kind: AppProject\n",
-        "kyverno/raw/exceptions/echo-build.yaml": "x",
     }
     result, opened = await onboard_trust(monkeypatch, public, {}, app="echo", key=PUBLIC_KEY)
-    assert (result, opened) == ("fence kept; key kept; push rule kept", [])
+    assert (result, opened) == ("fence kept; push rule kept", [])
     assert PINGS == []  # nothing opened, nothing to sweep
 
 
 async def test_an_open_or_rejected_pr_is_never_proposed_again(monkeypatch: pytest.MonkeyPatch):
     pulls = {
         "meru": [{"number": 4, "title": "chore(trust): onboard golem - fence", "state": "open"}],
-        "kyverno": [
-            {"number": 2, "title": "chore(trust): onboard golem - signing key", "state": "closed", "merged": False}
-        ],
+        "zot": [{"number": 2, "title": "chore(trust): onboard golem - push rule", "state": "closed", "merged": False}],
     }
     result, opened = await onboard_trust(monkeypatch, TRUST_REPOS, pulls)
     assert result.startswith(
-        "fence waiting on Meru/meru#4; key Meru/kyverno#2 was closed unmerged - not proposed again; push rule proposed"
+        "fence waiting on Meru/meru#4; push rule Meru/zot#2 was closed unmerged - not proposed again"
     )
-    assert [pr["title"] for pr in opened] == ["chore(trust): onboard golem - push rule"]
+    assert opened == []
 
 
 def fence_pr(**kw: object) -> dict[str, list[dict]]:
@@ -437,15 +418,6 @@ async def test_an_open_pr_is_left_alone_unless_it_conflicts_with_a_newer_main(mo
     result, opened = await onboard_trust(monkeypatch, {**TRUST_REPOS, **MAIN_NOW}, fence_pr(**pr))
     assert result.startswith("fence waiting on Meru/meru#47")
     assert not any(o["force"] for o in opened)
-
-
-async def test_another_key_for_the_app_is_never_swapped_in(monkeypatch: pytest.MonkeyPatch):
-    public = {**TRUST_REPOS, "meru/raw/projects/echo.yaml": "kind: AppProject\n"}
-    result, opened = await onboard_trust(monkeypatch, public, {}, app="echo", key=GOLEM_KEY)
-    assert result == (
-        "fence kept; key waiting: Meru/kyverno already trusts another key for echo - by hand; push rule kept"
-    )
-    assert opened == []
 
 
 async def test_a_trust_repo_that_lost_its_layout_is_not_retried(monkeypatch: pytest.MonkeyPatch):
@@ -708,17 +680,13 @@ async def test_the_runner_goes_and_the_repo_is_archived_once(tmp_path: Path):
 TRUSTED_GOLEM = {
     "meru/raw/projects/golem.yaml": "kind: AppProject\n",
     "meru/raw/kustomization.yaml": "resources:\n  - projects/echo.yaml\n  - projects/golem.yaml\n",
-    "kyverno/raw/keys/meru-signing-keys.yaml": SIGNING_KEYS
-    + "  golem: |\n    -----BEGIN PUBLIC KEY-----\n    GOLEM\n    -----END PUBLIC KEY-----\n",
-    "kyverno/raw/exceptions/golem-build.yaml": "kind: PolicyException\n",
-    "kyverno/raw/kustomization.yaml": "resources:\n  - exceptions/echo-build.yaml\n  - exceptions/golem-build.yaml\n",
     "zot/raw/config.json": trust.with_push_rule(
         (Path(__file__).parent.parent / "fixtures" / "zot-config.json").read_text(), "golem"
     ),
 }
 
 
-async def test_retiring_trust_proposes_three_removal_prs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+async def test_retiring_trust_proposes_two_removal_prs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     opened: list[dict] = []
 
     async def fake_open_pr(remote, user, token, topic, title, description, files, read, force=False):
@@ -730,15 +698,13 @@ async def test_retiring_trust_proposes_three_removal_prs(tmp_path: Path, monkeyp
     }
     activities, _ = retiring(tmp_path, {}, pulls=pulls, public=TRUSTED_GOLEM)
     result = await ActivityEnvironment().run(activities.retire_trust, "golem")
-    assert result == "fence proposed in Meru/meru; key proposed in Meru/kyverno; push rule proposed in Meru/zot"
-    fence, keys, push = opened
+    assert result == "fence proposed in Meru/meru; push rule proposed in Meru/zot"
+    fence, push = opened
     assert (fence["title"], fence["topic"]) == (
         "chore(trust): retire golem - fence",
         "retire-golem",
     )  # the merged onboard PR is older
     assert fence["files"] == {"projects/golem.yaml": None, "kustomization.yaml": "resources:\n  - projects/echo.yaml\n"}
-    assert keys["files"]["exceptions/golem-build.yaml"] is None
-    assert "golem" not in keys["files"]["keys/meru-signing-keys.yaml"]
     assert '"golem-builder"' not in push["files"]["config.json"]
     assert "only removes `golem`'s entries" in fence["description"]
     # what each change was worked out from: open_pr refuses the push if main moved since (Meru/zot#21)
@@ -747,23 +713,6 @@ async def test_retiring_trust_proposes_three_removal_prs(tmp_path: Path, monkeyp
         "projects/golem.yaml": TRUSTED_GOLEM["meru/raw/projects/golem.yaml"],
         "kustomization.yaml": TRUSTED_GOLEM["meru/raw/kustomization.yaml"],
     }
-    assert keys["read"]["exceptions/golem-build.yaml"] == TRUSTED_GOLEM["kyverno/raw/exceptions/golem-build.yaml"]
-
-
-async def test_retiring_trust_removes_each_environments_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    opened: list[dict] = []
-
-    async def fake_open_pr(remote, user, token, topic, title, description, files, read, force=False):
-        opened.append({"title": title, "files": files})
-
-    monkeypatch.setattr("shikigami.activities.base.open_pr", fake_open_pr)
-    keys = TRUSTED_GOLEM["kyverno/raw/keys/meru-signing-keys.yaml"]
-    for name in ("golem-uat", "golem-prod"):
-        keys += f"  {name}: |\n    -----BEGIN PUBLIC KEY-----\n    GOLEM\n    -----END PUBLIC KEY-----\n"
-    activities, _ = retiring(tmp_path, {}, public={**TRUSTED_GOLEM, "kyverno/raw/keys/meru-signing-keys.yaml": keys})
-    await ActivityEnvironment().run(activities.retire_trust, "golem", ["uat", "prod"])
-    [left] = [pr["files"]["keys/meru-signing-keys.yaml"] for pr in opened if "signing key" in pr["title"]]
-    assert left == SIGNING_KEYS  # every key of golem's gone, everyone else's untouched
 
 
 async def test_a_restore_proposes_onboarding_again_after_a_merged_retire(monkeypatch: pytest.MonkeyPatch):

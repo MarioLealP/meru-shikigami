@@ -5,22 +5,8 @@ import pytest
 import yaml
 
 from shikigami.core import trust
-from shikigami.core.marker import key_trusted
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
-KEY = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEnew\nnewnewnew==\n-----END PUBLIC KEY-----\n"
-KEYS = """# comment kept
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: meru-signing-keys
-  namespace: kyverno
-data:
-  echo: |
-    -----BEGIN PUBLIC KEY-----
-    AAAA
-    -----END PUBLIC KEY-----
-"""
 KUSTOMIZATION = """resources:
   - projects/platform.yaml
   - projects/echo.yaml
@@ -40,13 +26,6 @@ def test_the_fence_is_echos_hand_written_one_for_another_app():
 def test_a_description_with_yaml_in_it_stays_one_string():
     made = yaml.safe_load(trust.fence("golem", 'it says: "hi" # not a comment'))
     assert made["spec"]["description"] == 'Golem - it says: "hi" # not a comment'
-
-
-def test_the_build_exception_is_echos_for_another_app():
-    real = yaml.safe_load((FIXTURES / "kyverno-echo-build.yaml").read_text())
-    made = yaml.safe_load(trust.build_exception("echo"))
-    del real["metadata"]["annotations"], made["metadata"]["annotations"]  # the reason's wording, not trust
-    assert made == real
 
 
 def test_a_resource_goes_after_its_folders_last_entry():
@@ -78,35 +57,6 @@ def test_environments_widen_the_fence_to_their_namespaces():
 def test_a_fence_without_environments_is_the_same_text_as_before():
     assert trust.fence("echo", "x", []) == trust.fence("echo", "x")
     assert "into exactly its two namespaces, which it may also create" in trust.fence("echo", "x")
-
-
-def test_each_environment_trusts_the_apps_own_key():
-    added = trust.with_keys(KEYS, "golem", KEY, ["uat", "prod"])
-    data = yaml.safe_load(added)["data"]
-    assert list(data) == ["echo", "golem", "golem-uat", "golem-prod"]
-    assert data["golem"] == data["golem-uat"] == data["golem-prod"]
-    assert all(key_trusted(added, name, KEY) for name in ("golem", "golem-uat", "golem-prod"))
-    assert trust.with_keys(added, "golem", KEY, ["uat", "prod"]) == added  # kept
-    assert trust.with_keys(KEYS, "golem", KEY) == trust.with_key(KEYS, "golem", KEY)
-
-
-def test_a_key_is_added_and_the_file_keeps_its_comments():
-    added = trust.with_key(KEYS, "golem", KEY)
-    assert added.startswith(KEYS)
-    assert key_trusted(added, "golem", KEY)
-    assert key_trusted(added, "echo", "-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\n")
-
-
-def test_the_same_key_is_kept_and_another_one_is_never_swapped_in():
-    added = trust.with_key(KEYS, "golem", KEY)
-    assert trust.with_key(added, "golem", KEY) == added
-    with pytest.raises(trust.ConflictError):
-        trust.with_key(KEYS, "echo", KEY)
-
-
-def test_a_section_after_data_is_a_bad_layout():
-    with pytest.raises(trust.BadLayoutError):
-        trust.with_key(KEYS + "binaryData: {}\n", "golem", KEY)
 
 
 ZOT_CONFIG = (FIXTURES / "zot-config.json").read_text()  # Meru/zot's real config.json

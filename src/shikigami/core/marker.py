@@ -8,8 +8,6 @@ repos.py.
 import re
 from collections.abc import Mapping
 
-import yaml
-
 EMPTY_OWNER = re.compile(r'^owner: ""(?:[ \t]*#[^\n]*)?$', re.MULTILINE)
 
 
@@ -39,17 +37,6 @@ def with_owner(text: str, owner: str, path: str) -> str:
 def owner_unset(text: str) -> bool:
     """Whether the file still has the empty `owner: ""` line."""
     return EMPTY_OWNER.search(text) is not None
-
-
-def _body(key: str) -> str:
-    return "".join(line.strip() for line in key.splitlines() if line.strip() and "-----" not in line)
-
-
-def key_trusted(signing_keys: str, app: str, public_key: str) -> bool:
-    """Whether Meru/kyverno's signing-keys ConfigMap trusts exactly this key for the app (its namespace)."""
-    data = (yaml.safe_load(signing_keys) or {}).get("data") or {}
-    listed = data.get(app)
-    return isinstance(listed, str) and bool(_body(public_key)) and _body(listed) == _body(public_key)
 
 
 def env_name(secret: str) -> str:

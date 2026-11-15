@@ -91,8 +91,8 @@ class DeployActivities(ActivityBase):
         Made from the template's deploy/meru.yaml.in with the request's owner, plus the owner and the request's secrets
         wired into deploy/values.yaml (D99), as one PR Xolotl rebuilds and merges (D99: no Shikigami write reaches a
         main unchecked). "kept" once the marker is on main: the repo is the app's then, never touched again. Waits (says
-        why, the next sync tries again) until the app's fence and signing key are in place - a marker before them would
-        deploy into nothing - and while the PR is open.
+        why, the next sync tries again) until the app's fence is in place - a marker before it would deploy into
+        nothing - and while the PR is open. `public_key` is kept for workflows started before Kyverno was dropped.
         """
         s = self.settings
         token, org = s.gitea_token.get_secret_value(), s.apps_org
@@ -102,9 +102,6 @@ class DeployActivities(ActivityBase):
             return "kept"
         if await public_file(self.http, s.gitea_url, org, "meru", f"projects/{app}.yaml") is None:
             return f"waiting: no fence Meru/meru projects/{app}.yaml"
-        keys = await public_file(self.http, s.gitea_url, org, "kyverno", "keys/meru-signing-keys.yaml")
-        if keys is None or not marker.key_trusted(keys, app, public_key):
-            return f"waiting: Meru/kyverno doesn't trust {app}'s signing key yet"
         template = await read_file(self.http, s.gitea_url, token, org, app, "deploy/meru.yaml.in")
         if template is None:
             return "waiting: no deploy/meru.yaml.in (repo generated before the template had it)"
