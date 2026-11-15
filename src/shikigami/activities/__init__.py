@@ -6,5 +6,6 @@ against those names, so they never change. One module per domain.
 
 from shikigami.activities.build import BuildActivities
 from shikigami.activities.combined import Activities
+from shikigami.activities.registry import defined
 
-__all__ = ["Activities", "BuildActivities"]
+__all__ = ["Activities", "BuildActivities", "defined"]
