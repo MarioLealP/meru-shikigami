@@ -32,6 +32,15 @@ def test_requested_apps_carry_what_their_steps_need():
     assert (action.template, action.description) == ("nuwa/go", "an app")
 
 
+def test_requested_apps_carry_their_theme_unsorted_by_default():
+    spec = {"owner": "mario", "description": "an app", "theme": "home"}
+    books = App.model_validate(
+        {"apiVersion": "meru.clockmost.com/v1", "kind": "App", "metadata": {"name": "books"}, "spec": spec}
+    )
+    actions = plan({"echo": app("echo"), "books": books}, {})
+    assert [(a.app, a.theme) for a in actions] == [("books", "home"), ("echo", "unsorted")]
+
+
 def test_retired_apps_carry_no_template():
     (action,) = plan({}, {"old": existing("old")})
     assert action.template is None

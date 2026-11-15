@@ -163,7 +163,12 @@ def retire_activities(log: list[str], retire: dict[str, object] | None):
         log.append(f"restore_unmark_namespaces {app}" + (f" envs={','.join(environments)}" if environments else ""))
         return [app]
 
-    return [*retire_steps, retire_mark, retire_mark_namespaces, restore_unmark_namespaces]
+    @activity.defn(name="apply_theme")
+    async def apply_theme(app: str, theme: str, environments: list[str]) -> list[str]:
+        log.append(f"apply_theme {app} {theme}" + (f" envs={','.join(environments)}" if environments else ""))
+        return [app]
+
+    return [*retire_steps, retire_mark, retire_mark_namespaces, restore_unmark_namespaces, apply_theme]
 
 
 def activities(
@@ -249,6 +254,15 @@ async def test_every_requested_app_ensures_its_repo_and_retiring_touches_nothing
     assert sorted(a.app for a in done) == ["echo", "old"]
 
 
+async def test_every_requested_app_gets_its_theme_and_a_retiring_one_doesnt(env: WorkflowEnvironment):
+    snapshot = RequestsSnapshot(commit="c1", apps={"echo": ECHO}, databases={}, problems=[])
+    known = ExistingApp(key="echo", status="active", template="nuwa/python")
+    gone = ExistingApp(key="old", status="active", template="nuwa/python")
+    log: list[str] = []
+    await run_sync(env.client, snapshot, {"echo": known, "old": gone}, log)
+    assert [line for line in log if line.startswith("apply_theme")] == ["apply_theme echo unsorted"]
+
+
 async def test_build_credentials_follow_the_repo_in_order(env: WorkflowEnvironment):
     snapshot = RequestsSnapshot(commit="c1", apps={"echo": ECHO}, databases={}, problems=[])
     gone = ExistingApp(key="old", status="active", template="nuwa/python")
@@ -290,7 +304,8 @@ async def test_a_first_build_that_never_settles_still_ends_in_the_lock_out(env: 
     snapshot = RequestsSnapshot(commit="c1", apps={"echo": ECHO}, databases={}, problems=[])
     log: list[str] = []
     await run_sync(env.client, snapshot, {}, log, "kept", first_build=None)
-    assert log[-2:] == ["first_build echo", "lock_out echo"]  # a broken build doesn't keep Shikigami admin
+    steps = [line for line in log if not line.startswith("apply_theme")]  # the theme runs beside the detached build
+    assert steps[-2:] == ["first_build echo", "lock_out echo"]  # a broken build doesn't keep Shikigami admin
     result = await env.client.get_workflow_handle("first-build-echo").result()
     assert result == "first build not settled within an hour; lock-out kept"
 

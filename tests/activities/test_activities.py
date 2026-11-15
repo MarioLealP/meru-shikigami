@@ -939,6 +939,24 @@ async def test_a_refused_mark_is_retried(tmp_path: Path):
         await ActivityEnvironment().run(activities.retire_mark_namespaces, "golem", datetime(2026, 11, 3, tzinfo=UTC))
 
 
+async def test_the_theme_goes_onto_every_namespace_that_exists(tmp_path: Path):
+    cluster: dict[str, dict[str, str]] = {"books": {"keep": "me"}, "books-build": {}, "books-uat": {}}  # no prod yet
+    activities = marking(tmp_path, cluster)
+    themed = await ActivityEnvironment().run(activities.apply_theme, "books", "home", ["uat", "prod"])
+    assert themed == ["books", "books-build", "books-uat"]
+    assert cluster == {
+        "books": {"keep": "me", "meru.clockmost.com/theme": "home"},
+        "books-build": {"meru.clockmost.com/theme": "home"},
+        "books-uat": {"meru.clockmost.com/theme": "home"},
+    }
+
+
+@pytest.mark.parametrize("refuse", [403, 422])
+async def test_a_refused_theme_is_skipped_not_an_error(tmp_path: Path, refuse: int):
+    activities = marking(tmp_path, {"books": {}}, refuse=refuse)  # Meru/meru's policy not widened yet
+    assert await ActivityEnvironment().run(activities.apply_theme, "books", "home", []) == []
+
+
 async def test_restore_takes_the_mark_off(tmp_path: Path):
     cluster = {"golem": {"meru.clockmost.com/removed-at": "2026-11-03T12:31:18Z", "keep": "me"}, "golem-build": {}}
     activities = marking(tmp_path, cluster)
@@ -953,6 +971,7 @@ def test_activity_names_are_the_ones_running_workflows_replay_against():
 
     assert names(Activities) == {
         "read_requests",
+        "apply_theme",
         "read_existing_apps",
         "declare_apps",
         "ensure_repo",

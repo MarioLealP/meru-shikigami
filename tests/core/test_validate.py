@@ -72,6 +72,7 @@ def test_good_repo(tmp_path: Path) -> None:
         ({"apps/echo.yaml": ECHO + "  colour: blue\n"}, "spec.colour: Extra inputs are not permitted"),
         ({"apps/echo.yaml": ECHO.replace("kind: App", "kind: Database")}, "kind"),
         ({"apps/echo.yaml": ECHO + "  size: huge\n"}, "spec.size"),
+        ({"apps/echo.yaml": ECHO + "  theme: Home Stuff\n"}, "spec.theme"),
         ({"apps/echo.yaml": ECHO + "  template: nuwa/upstream\n"}, "image is required"),
         ({"apps/echo.yaml": ECHO + "  image: nginx\n"}, "image is required"),
         ({"apps/echo.yaml": ECHO + "  route: {host: echo.example.com}\n"}, "spec.route.host"),
