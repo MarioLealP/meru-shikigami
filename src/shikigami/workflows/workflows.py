@@ -103,6 +103,15 @@ class AppWorkflow:
         if action.kind == "retire" and action.template:  # removed by its request (D83); no request at all: dry run
             await self._retire(action.app, action.removed_at, action.environments)
             return
+        # The theme onto its namespaces, every pass (behind a patch: a pass already running replays without it).
+        if action.kind != "retire" and action.template and workflow.patched("theme"):
+            themed = await workflow.execute_activity_method(
+                Activities.apply_theme,
+                args=[action.app, action.theme, action.environments],
+                start_to_close_timeout=TIMEOUT,
+                retry_policy=RETRY,
+            )
+            workflow.logger.info("app %s: theme %s on %s", action.app, action.theme, themed or "(no namespace yet)")
         await workflow.execute_activity_method(
             Activities.dry_run, action, start_to_close_timeout=TIMEOUT, retry_policy=RETRY
         )

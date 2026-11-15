@@ -110,6 +110,13 @@
           "title": "Retention",
           "type": "string"
         },
+        "theme": {
+          "default": "unsorted",
+          "description": "The group the app sits in (its namespaces carry it; Rancher's project), e.g. felt, home, games.",
+          "pattern": "^[a-z]([-a-z0-9]{0,28}[a-z0-9])?$",
+          "title": "Theme",
+          "type": "string"
+        },
         "removed": {
           "default": false,
           "description": "true = retire (D83): stopped and revoked now, purged after the retention.",

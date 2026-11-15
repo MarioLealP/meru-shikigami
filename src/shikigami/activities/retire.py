@@ -6,13 +6,14 @@ In this order, each step keeping what's done: stop -> wait for Argo -> park the 
 
 from datetime import datetime
 
+import httpx2
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from shikigami.activities.base import ActivityBase
 from shikigami.activities.texts import PARK, STOP, retire_title
 from shikigami.clients.argo import application, not_stopped
-from shikigami.clients.namespaces import set_removed_at, stamp
+from shikigami.clients.namespaces import THEME, set_annotation, set_removed_at, stamp
 from shikigami.clients.proposals import Edit
 from shikigami.clients.repos import archive, change, commit_files, delete_runners, head, is_admin, read_file
 from shikigami.clients.sources import mark_retire_step
@@ -205,6 +206,28 @@ class RetireActivities(ActivityBase):
         Argo doesn't remove an annotation it didn't write - this does.
         """
         return await self._set_removed_at(app, None, environments or [])
+
+    @activity.defn
+    async def apply_theme(self, app: str, theme: str, environments: list[str]) -> list[str]:
+        """The request's theme onto the app's namespaces that exist; returns them.
+
+        Every pass: a changed theme moves them, and a namespace made since gets it. A refused write (Meru/meru's
+        admission policy not widened yet) is skipped, not an error - the theme is cosmetic; the next pass tries again.
+        """
+        s = self.settings
+        if self.kube is None:
+            raise ApplicationError("no Kubernetes API client (kubernetesApi off?)", non_retryable=True)
+        token = s.kubernetes_dir / "token"
+        themed = []
+        for ns in trust.namespaces(app, environments):
+            try:
+                if await set_annotation(self.kube, s.kubernetes_url, token, ns, THEME, theme):
+                    themed.append(ns)
+            except httpx2.HTTPStatusError as e:
+                if e.response.status_code not in (403, 422):
+                    raise
+                activity.logger.warning("%s: theme refused (%s) - left for the next pass", ns, e.response.status_code)
+        return themed
 
     @activity.defn
     async def retire_archive(self, app: str) -> bool:

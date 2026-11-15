@@ -125,6 +125,10 @@ class AppSpec(_Model):
         default=[], max_length=4, description="Further environments running this app's image (D126), e.g. uat, prod."
     )
     retention: Days = "30d"
+    theme: Name = Field(
+        default="unsorted",
+        description="The group the app sits in (its namespaces carry it; Rancher's project), e.g. felt, home, games.",
+    )
     removed: bool = Field(
         default=False, description="true = retire (D83): stopped and revoked now, purged after the retention."
     )
