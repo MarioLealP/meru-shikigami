@@ -9,7 +9,7 @@ from pydantic import SecretStr
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
-from shikigami.activities import Activities, BuildActivities
+from shikigami.activities import Activities, BuildActivities, defined
 from shikigami.clients.tokens import TokenSource
 from shikigami.config import Settings
 from shikigami.core import marker, trust
@@ -962,6 +962,13 @@ async def test_restore_takes_the_mark_off(tmp_path: Path):
     activities = marking(tmp_path, cluster)
     assert await ActivityEnvironment().run(activities.restore_unmark_namespaces, "golem") == ["golem", "golem-build"]
     assert cluster == {"golem": {"keep": "me"}, "golem-build": {}}
+
+
+def test_the_worker_registers_every_activity_including_the_theme(tmp_path: Path):
+    activities = marking(tmp_path, {})
+    names = {getattr(f, "__temporal_activity_definition").name for f in defined(activities)}
+    assert "apply_theme" in names
+    assert len(names) == len(defined(activities))
 
 
 def test_activity_names_are_the_ones_running_workflows_replay_against():

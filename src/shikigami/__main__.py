@@ -12,7 +12,7 @@ import sentry_sdk
 import uvicorn
 from temporalio.worker import Worker
 
-from shikigami.activities import Activities, BuildActivities
+from shikigami.activities import Activities, BuildActivities, defined
 from shikigami.api.app import make_app
 from shikigami.clients.openbao import KV, KubernetesLogin
 from shikigami.clients.repos import runner_token
@@ -61,31 +61,7 @@ async def run() -> None:
             client,
             task_queue=settings.task_queue,
             workflows=[RequestsSync, AppWorkflow, OnboardBuild, FirstBuild],
-            activities=[
-                activities.read_requests,
-                activities.read_existing_apps,
-                activities.declare_apps,
-                activities.ensure_repo,
-                activities.ensure_trust,
-                activities.ensure_glitchtip,
-                activities.ensure_deploy_files,
-                activities.first_build,
-                activities.lock_out,
-                activities.retire_stop,
-                activities.retire_wait_stopped,
-                activities.retire_park_marker,
-                activities.retire_trust,
-                activities.retire_runner,
-                activities.retire_archive,
-                activities.retire_mark_namespaces,
-                activities.restore_unmark_namespaces,
-                activities.retire_mark,
-                activities.dry_run,
-                build.ensure_build_keys,
-                build.ensure_zot_login,
-                build.ensure_runner_registration,
-                build.revoke_zot_login,
-            ],
+            activities=[*defined(activities), *defined(build)],  # every @activity.defn - none to forget
             max_concurrent_activities=settings.max_concurrent_activities,
         )
         server = uvicorn.Server(
