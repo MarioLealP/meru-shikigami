@@ -29,6 +29,10 @@ class _Branch(Incoming):
     commit: _Commit
 
 
+class _Jobs(Incoming):
+    total_count: int
+
+
 class _Runner(Incoming):
     id: int
 
@@ -339,3 +343,14 @@ async def become_reader(http: httpx2.AsyncClient, gitea_url: str, token: str, or
         json={"permission": "read"},
     )
     response.raise_for_status()
+
+
+async def waiting_jobs(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str) -> int:
+    """How many of the repo's Actions jobs wait for a runner - what an app's one-job build runners scale on."""
+    response = await http.get(
+        f"{gitea_url}/api/v1/repos/{org}/{repo}/actions/jobs",
+        params={"status": "waiting", "limit": 1},
+        headers={"Authorization": f"token {token}"},
+    )
+    response.raise_for_status()
+    return _Jobs.model_validate_json(response.content).total_count

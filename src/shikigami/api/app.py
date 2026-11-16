@@ -1,7 +1,7 @@
 """Shikigami's HTTP side.
 
-Probes, the webhook ping (D65), the backlog KEDA scales on (D75) and the request check Janus asks before opening a
-request PR (D96).
+Probes, the webhook ping (D65), the backlog KEDA scales on (D75), the request check Janus asks before opening a
+request PR (D96) and each app's waiting build jobs, which its one-job runners scale on.
 """
 
 import hashlib
@@ -15,6 +15,7 @@ from temporalio.client import Client
 from temporalio.common import WorkflowIDConflictPolicy
 from temporalio.service import RPCError
 
+from shikigami.api.builds import builds_router
 from shikigami.clients.sources import Proposal, Verdict, check_proposal
 from shikigami.clients.temporal import backlog
 from shikigami.config import Settings
@@ -28,7 +29,7 @@ def _signed(secret: SecretStr, body: bytes, signature: str | None) -> bool:
 
 
 def make_app(settings: Settings, client: Client, http: httpx2.AsyncClient) -> FastAPI:
-    """The FastAPI app: probes, /ping, /validate and /backlog."""
+    """The FastAPI app: probes, /ping, /validate, /backlog and /builds/<app>/waiting."""
     app = FastAPI(title="Shikigami", docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.get("/heartbeat", status_code=200)
@@ -80,5 +81,7 @@ def make_app(settings: Settings, client: Client, http: httpx2.AsyncClient) -> Fa
     @app.get("/backlog", status_code=200)
     async def get_backlog() -> dict[str, int]:
         return {"backlog": await backlog(client, settings)}
+
+    app.include_router(builds_router(settings, http))
 
     return app
