@@ -312,7 +312,8 @@
         "class": {
           "enum": [
             "ssd",
-            "hdd"
+            "hdd",
+            "bulk"
           ],
           "title": "Class",
           "type": "string"

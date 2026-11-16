@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from temporalio.contrib.pydantic import pydantic_data_converter
 
 from shikigami.core.validate import check
-from shikigami.models.request_format import App
+from shikigami.models.request_format import App, Database
 from shikigami.models.schema import schemas
 
 ECHO = """\
@@ -192,3 +192,30 @@ def test_temporal_payloads_keep_the_request_files_names():
 def test_a_request_file_cant_use_the_python_names(request_file: dict):
     with pytest.raises(ValidationError):
         App.model_validate(request_file)
+
+
+def test_an_app_volume_may_ask_for_the_bulk_disk():
+    app = App.model_validate(
+        {
+            "apiVersion": "meru.clockmost.com/v1",
+            "kind": "App",
+            "metadata": {"name": "echo"},
+            "spec": {
+                "owner": "mario",
+                "description": "Placeholder app",
+                "storage": [{"name": "files", "size": "500Gi", "class": "bulk", "mountPath": "/f"}],
+            },
+        }
+    )
+    assert app.spec.storage[0].storage_class == "bulk"
+
+
+def test_a_database_never_goes_on_the_bulk_disk():
+    db = {
+        "apiVersion": "meru.clockmost.com/v1",
+        "kind": "Database",
+        "metadata": {"name": "thoth"},
+        "spec": {"owner": "mario", "storage": {"size": "2Gi", "class": "bulk"}, "app": "thoth"},
+    }
+    with pytest.raises(ValidationError):
+        Database.model_validate(db)
