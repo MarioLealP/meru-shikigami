@@ -28,7 +28,9 @@ Entry = Annotated[str, StringConstraints(pattern=r"^env(-[0-9]{8}-[0-9a-f]{6})?$
 # An environment's name (D126): its namespace is <app>-<name>, so short; "build" is taken by the build namespace.
 EnvName = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9]{0,7}$")]
 Size = Literal["small", "medium", "large"]  # small 50m/64Mi/256Mi, medium 200m/256Mi/1Gi, large 1/1Gi/4Gi (approval)
-StorageClass = Literal["ssd", "hdd"]
+# ssd = the NVMe (class local), hdd = the backup HDD (re-fetchable bulk), bulk = the 1 TB data HDD (big, kept).
+StorageClass = Literal["ssd", "hdd", "bulk"]
+DatabaseStorageClass = Literal["ssd", "hdd"]  # never bulk: databases stay off the slow data disk
 
 
 class _Model(BaseModel):
@@ -181,7 +183,7 @@ class DatabaseStorage(_Model):
     model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
 
     size: Quantity
-    storage_class: StorageClass = Field(alias="class")
+    storage_class: DatabaseStorageClass = Field(alias="class")
 
 
 class DatabaseSpec(_Model):
