@@ -65,3 +65,33 @@ def test_ping_checks_gitea_signature(monkeypatch: pytest.MonkeyPatch, signature:
     headers = {"X-Gitea-Signature": signature} if signature else {}
     assert web.post("/ping", content=b"{}", headers=headers).status_code == status
     assert len(started) == starts
+
+
+def test_waiting_builds_counts_the_apps_waiting_jobs(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("SHIKIGAMI_GITEA_TOKEN", "tok")
+    seen: list[httpx2.Request] = []
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request)
+        return httpx2.Response(200, json={"jobs": [{"id": 7}], "total_count": 3})
+
+    http = httpx2.AsyncClient(transport=httpx2.MockTransport(answer))
+    web = TestClient(make_app(Settings(), cast(Client, None), http))
+    r = web.get("/builds/echo/waiting")
+    assert r.status_code == 200
+    assert r.json() == {"waiting": 3}
+    assert seen[0].url.path == "/api/v1/repos/Meru/echo/actions/jobs"
+    assert seen[0].url.params["status"] == "waiting"
+    assert seen[0].headers["Authorization"] == "token tok"
+
+
+@pytest.mark.parametrize("name", ["Echo", "-echo", "echo_x", "e" * 50])
+def test_waiting_builds_takes_only_app_names(web: TestClient, name: str):
+    assert web.get(f"/builds/{name}/waiting").status_code in (404, 422)
+
+
+def test_waiting_builds_says_502_when_gitea_fails(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("SHIKIGAMI_GITEA_TOKEN", "tok")
+    down = httpx2.AsyncClient(transport=httpx2.MockTransport(lambda r: httpx2.Response(500)))
+    web = TestClient(make_app(Settings(), cast(Client, None), down))
+    assert web.get("/builds/echo/waiting").status_code == 502
