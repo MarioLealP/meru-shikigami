@@ -1,4 +1,4 @@
-# Shikigami
+# Shikigami - app orchestrator
 
 The orchestrator of **Meru**, a small in-house container platform (CaaS) on k3s. Someone asks for an app or a
 database in [Meru/requests](https://git.clockmost.com/Meru/requests) (private); Shikigami turns that request into
