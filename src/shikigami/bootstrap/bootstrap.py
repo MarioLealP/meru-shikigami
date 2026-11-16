@@ -1,6 +1,8 @@
 """`shikigami-bootstrap <app>`: runs OnboardBuild once with borrowed authority.
 
-For Shikigami's own build credentials, which it can't make for itself (nothing would let it in yet). Run on the server
+For Shikigami's own build credentials, which it can't make for itself (nothing would let it in yet).
+`shikigami-bootstrap --runner-only <repo>` runs RegisterRunner instead: only the runner token, for a repo that runs
+checks and never builds (Meru/meru, Meru/nuwa), so no signing key or Zot login is made for it. Run on the server
 under an OpenBao admin session: a short-lived worker on its own queue, so it only ever picks up this run, which it
 starts and waits for. The run is a normal Temporal workflow, with its history in the UI like any other.
 """
@@ -22,7 +24,7 @@ from shikigami.clients.openbao import KV
 from shikigami.clients.temporal import connect
 from shikigami.clients.tokens import TokenSource
 from shikigami.config import Settings
-from shikigami.workflows.workflows import OnboardBuild
+from shikigami.workflows.workflows import OnboardBuild, RegisterRunner
 
 
 class BootstrapSettings(BaseSettings):
@@ -37,8 +39,11 @@ class BootstrapSettings(BaseSettings):
     task_queue: str = "shikigami-bootstrap"  # not Shikigami's: the real workers never see these tasks
 
 
-async def run(app: str) -> str:
-    """Run OnboardBuild for `app` on a worker of its own; returns the cosign public key."""
+async def run(app: str, runner_only: bool = False) -> str:
+    """Run OnboardBuild (or RegisterRunner) for `app` on a worker of its own.
+
+    Returns the cosign public key, or with `runner_only` whether the runner token was made.
+    """
     settings, boot = Settings(), BootstrapSettings()
     tls = ssl.create_default_context(cafile=boot.openbao_ca)
     async with httpx2.AsyncClient(timeout=30) as http, httpx2.AsyncClient(timeout=30, verify=tls) as bao:
@@ -64,6 +69,17 @@ async def run(app: str) -> str:
         activities = BuildActivities(
             kv=kv, registry=settings.zot_registry, cosign=settings.cosign, runner_token=runner_token
         )
+        if runner_only:
+            async with Worker(
+                client,
+                task_queue=boot.task_queue,
+                workflows=[RegisterRunner],
+                activities=[activities.ensure_runner_registration],
+            ):
+                made = await client.execute_workflow(
+                    RegisterRunner.run, app, id=f"register-runner-{app}", task_queue=boot.task_queue
+                )
+            return f"runner token for {app}: {'made' if made else 'already there, kept'}\n"
         async with Worker(
             client,
             task_queue=boot.task_queue,
@@ -82,7 +98,8 @@ async def run(app: str) -> str:
 def main() -> None:
     """The `shikigami-bootstrap` command."""
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--runner-only", action="store_true", help="only the runner token (a check-only repo)")
     parser.add_argument("app")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    print(asyncio.run(run(args.app)), end="")  # the cosign public key
+    print(asyncio.run(run(args.app, runner_only=args.runner_only)), end="")  # the cosign public key, or the result

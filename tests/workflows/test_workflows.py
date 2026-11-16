@@ -13,7 +13,14 @@ from temporalio.worker import Worker
 
 from shikigami.models.request_format import App, Environment
 from shikigami.models.sync import AppAction, ExistingApp, RequestsSnapshot
-from shikigami.workflows.workflows import AppWorkflow, FirstBuild, OnboardBuild, RequestsSync, fingerprint
+from shikigami.workflows.workflows import (
+    AppWorkflow,
+    FirstBuild,
+    OnboardBuild,
+    RegisterRunner,
+    RequestsSync,
+    fingerprint,
+)
 
 ECHO = App.model_validate(
     {
@@ -406,3 +413,33 @@ async def test_a_retained_app_whose_request_is_back_is_marked_planned_then_onboa
     assert "ensure_deploy_files echo mario" in steps
     assert not any(s.startswith("retire_stop") for s in steps)
     assert [a.kind for a in done] == ["restore"]  # the closing dry-run line, as for any onboarding pass
+
+
+async def test_register_runner_makes_only_the_runner_token(env: WorkflowEnvironment):
+    called: list[str] = []
+
+    @activity.defn(name="ensure_runner_registration")
+    async def ensure_runner_registration(repo: str) -> bool:
+        called.append(f"ensure_runner_registration {repo}")
+        return True
+
+    @activity.defn(name="ensure_build_keys")
+    async def ensure_build_keys(app: str) -> str:
+        called.append(f"ensure_build_keys {app}")
+        return "key"
+
+    @activity.defn(name="ensure_zot_login")
+    async def ensure_zot_login(app: str) -> bool:
+        called.append(f"ensure_zot_login {app}")
+        return True
+
+    queue = f"test-{uuid.uuid4()}"
+    async with Worker(
+        env.client,
+        task_queue=queue,
+        workflows=[RegisterRunner],
+        activities=[ensure_runner_registration, ensure_build_keys, ensure_zot_login],
+    ):
+        made = await env.client.execute_workflow(RegisterRunner.run, "meru", id=f"r-{uuid.uuid4()}", task_queue=queue)
+    assert made is True
+    assert called == ["ensure_runner_registration meru"]  # no signing key, no Zot login for a check-only repo
