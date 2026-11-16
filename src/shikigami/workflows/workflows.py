@@ -203,6 +203,23 @@ class OnboardBuild:
 
 
 @workflow.defn
+class RegisterRunner:
+    """Only the runner token, for a repo that runs checks and never builds.
+
+    Meru/meru and Meru/nuwa (sindri-build `build: false`): no build keys and no Zot login, nothing to sign with.
+
+    Returns whether the token was made (False: it was there already).
+    """
+
+    @workflow.run
+    async def run(self, repo: str) -> bool:
+        """Make the token if missing."""
+        return await workflow.execute_activity_method(
+            BuildActivities.ensure_runner_registration, repo, start_to_close_timeout=TIMEOUT, retry_policy=RETRY
+        )
+
+
+@workflow.defn
 class FirstBuild:
     """D90: wait for the app's first build, then lock out (D89) whatever came of it.
 
