@@ -38,7 +38,7 @@ def namespaces(app: str, environments: Sequence[str] = ()) -> list[str]:
 def fence(app: str, description: str, environments: Sequence[str] = ()) -> str:
     """projects/<app>.yaml: its own repo plus the Nüwa and Sindri charts, into exactly its namespaces."""
     where = (
-        "into exactly its namespaces - the app's, its build's and its environments' (D126) -"
+        "into exactly its namespaces - the app's, its build's and its environments' -"
         if environments
         else "into exactly its two namespaces,"
     )
@@ -47,7 +47,7 @@ def fence(app: str, description: str, environments: Sequence[str] = ()) -> str:
     )
     kinds = "".join(f'    - {{ group: "", kind: Namespace, name: {ns} }}\n' for ns in namespaces(app, environments))
     return f"""# {title(app)}'s fence: where its Application may read from and deploy to - its own repo plus the
-# Nüwa and Sindri charts, {where} which it may also create. Written by Shikigami (D82).
+# Nüwa and Sindri charts, {where} which it may also create.
 apiVersion: argoproj.io/v1alpha1
 kind: AppProject
 metadata:
