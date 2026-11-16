@@ -755,32 +755,39 @@ def locking(admin: bool, users: set[str], renovate: bool = False) -> tuple[Activ
         gitea_token=SecretStr("tok"),
         gitea_user="shikigami",
         merger_user="xolotl",
+        release_user="meru-release",
         renovate_user="renovate-bot",
         apps_org="Meru",
     )
     return Activities(settings=settings, http=http, thoth_tokens=tokens), writes
 
 
-async def test_lock_out_protects_hands_over_and_leaves_in_that_order():
-    activities, writes = locking(admin=True, users={"xolotl"})
+async def test_lock_out_hands_over_protects_and_leaves_in_that_order():
+    activities, writes = locking(admin=True, users={"xolotl", "meru-release"})
     result = await ActivityEnvironment().run(activities.lock_out, "echo")
-    assert result == "main protection added, xolotl given Write, Shikigami down to Read"
-    # each step needs the admin right the last one gives up
+    assert result == ("main protection added, xolotl given Write, meru-release given Write, Shikigami down to Read")
+    # the release bot needs Write before it can be on main's push allowlist; each step needs the admin right the last
+    # one gives up
     assert writes == [
-        ("POST", "/branch_protections"),
         ("PUT", "/collaborators/xolotl"),
+        ("PUT", "/collaborators/meru-release"),
+        ("POST", "/branch_protections"),
         ("PUT", "/collaborators/shikigami"),
     ]
 
 
 async def test_lock_out_gives_renovate_write_when_the_repo_opts_in():
-    activities, writes = locking(admin=True, users={"xolotl", "renovate-bot"}, renovate=True)
+    activities, writes = locking(admin=True, users={"xolotl", "meru-release", "renovate-bot"}, renovate=True)
     result = await ActivityEnvironment().run(activities.lock_out, "echo")
-    assert result == ("main protection added, xolotl given Write, renovate-bot given Write, Shikigami down to Read")
+    assert result == (
+        "main protection added, xolotl given Write, meru-release given Write, renovate-bot given Write,"
+        " Shikigami down to Read"
+    )
     assert writes == [
-        ("POST", "/branch_protections"),
         ("PUT", "/collaborators/xolotl"),
+        ("PUT", "/collaborators/meru-release"),
         ("PUT", "/collaborators/renovate-bot"),
+        ("POST", "/branch_protections"),
         ("PUT", "/collaborators/shikigami"),
     ]
 
@@ -788,7 +795,10 @@ async def test_lock_out_gives_renovate_write_when_the_repo_opts_in():
 async def test_lock_out_still_leaves_before_the_merger_exists():
     activities, writes = locking(admin=True, users=set())
     result = await ActivityEnvironment().run(activities.lock_out, "echo")
-    assert result == "main protection added, xolotl skipped (no such user yet), Shikigami down to Read"
+    assert result == (
+        "main protection added, xolotl skipped (no such user yet), meru-release skipped (no such user yet),"
+        " Shikigami down to Read"
+    )
     assert [w[0] for w in writes] == ["POST", "PUT"]
 
 

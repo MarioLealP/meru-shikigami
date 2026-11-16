@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     gitea_token: SecretStr
     gitea_user: str = "shikigami"  # the token's account - git's Basic auth names it (AGit PRs, D82)
     merger_user: str = "xolotl"  # gets Write on each app repo as Shikigami steps down to Read (D87, D89)
+    # The only account that may push main directly (the digest commit) - meru-release's bot (audit 2026-11, P1).
+    release_user: str = "meru-release"
     renovate_user: str = "renovate-bot"  # gets Write at the lock-out on repos that carry a renovate.json (cm-1rpd)
     merger_ping_url: str = "http://xolotl.xolotl.svc/ping"  # "trust PRs opened, sweep now" (D87)
     first_build_reruns: int = 2  # D90: a failed first build is re-run this many times before Shikigami leaves
