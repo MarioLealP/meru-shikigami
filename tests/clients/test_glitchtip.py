@@ -103,6 +103,19 @@ async def test_a_made_project_logs_its_dsn(caplog: pytest.LogCaptureFixture):
     assert f"app echo: GlitchTip project created, DSN {DSN}" in caplog.text
 
 
+async def test_an_upstream_image_app_gets_no_project():
+    # glitchtip, warpgate, zot: someone else's image has no Sentry SDK, so a project would stay empty (cm-2fz7).
+    gt = GlitchTip(set())
+    assert await ActivityEnvironment().run(activities(gt, "gt-token").ensure_glitchtip, "zot", "nuwa/upstream") is None
+    assert gt.calls == []
+    assert gt.projects == set()
+
+
+async def test_an_own_code_app_still_gets_its_project():
+    gt = GlitchTip(set())
+    assert await ActivityEnvironment().run(activities(gt, "gt-token").ensure_glitchtip, "echo", "nuwa/python") == DSN
+
+
 # The contract with Xolotl, byte for byte: its tests/test_marker_pr.py expects this same text.
 BLOCK = (
     "\n# Crash reports (D125): this app's GlitchTip project, which Shikigami made at onboarding.\n"

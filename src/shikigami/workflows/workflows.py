@@ -88,7 +88,10 @@ class AppWorkflow:
                 # D125, behind a patch: a pass already running on the old code replays without this step.
                 if workflow.patched("glitchtip-dsn"):
                     dsn = await workflow.execute_activity_method(
-                        Activities.ensure_glitchtip, action.app, start_to_close_timeout=TIMEOUT, retry_policy=RETRY
+                        Activities.ensure_glitchtip,
+                        args=[action.app, action.template],
+                        start_to_close_timeout=TIMEOUT,
+                        retry_policy=RETRY,
                     )
                     deploy_args.append(dsn)
                 deploy = await workflow.execute_activity_method(

@@ -57,14 +57,16 @@ class DeployActivities(ActivityBase):
     """The last onboarding steps, in the order they run (D81, D89, D90)."""
 
     @activity.defn
-    async def ensure_glitchtip(self, app: str) -> str | None:
+    async def ensure_glitchtip(self, app: str, template: str | None = None) -> str | None:
         """The app's GlitchTip project, made if missing, and its DSN (D125); None without a GlitchTip token.
+
+        None too for template nuwa/upstream: someone else's image has no Sentry SDK, so its project would stay empty.
 
         Runs every pass, so apps onboarded before D125 get their project too. Their repo is theirs (D89): the DSN goes
         in by their own PR, so a project made here has its DSN logged.
         """
         s = self.settings
-        if s.glitchtip_token is None:
+        if s.glitchtip_token is None or template == "nuwa/upstream":
             return None
         try:
             dsn, created = await glitchtip.project_dsn(
