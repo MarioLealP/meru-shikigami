@@ -65,9 +65,11 @@ async def test_a_repo_the_bot_left_is_kept_without_asking_to_generate():
 
 
 async def test_a_missing_template_repo_is_named():
-    with pytest.raises(NoTemplateError, match="no template repo Meru/nuwa-upstream"):
+    with pytest.raises(NoTemplateError, match="no template repo Meru/nuwa-upstream") as caught:
         async with gitea(404, []) as http:
             await ensure_repo(http, "https://git.test", "tok", "Meru", "echo", "nuwa/upstream", "x")
+    # Gitea answers 404 to a bot that can't see the repo too, so the message says so (cm-d1mu).
+    assert "may not have Read access" in str(caught.value)
 
 
 async def test_runner_token_comes_from_the_repo():

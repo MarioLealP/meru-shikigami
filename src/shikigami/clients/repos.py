@@ -86,7 +86,11 @@ async def ensure_repo(
     if response.status_code == 409:  # already there: kept, whatever made it
         return False
     if response.status_code == 404:
-        raise NoTemplateError(f"{template}: no template repo {org}/{source}")
+        # Gitea's 404 also means "not visible to this bot": a template repo it isn't a collaborator on.
+        raise NoTemplateError(
+            f"{template}: no template repo {org}/{source}, "
+            "or the bot may not have Read access to it (Gitea answers 404 to both)"
+        )
     response.raise_for_status()
     return True
 
