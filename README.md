@@ -62,6 +62,10 @@ to one of them - and KEDA adds replicas when tasks queue up.
   `shikigami-bootstrap <app>` runs it once with an admin session's authority, on its own queue - how Shikigami made
   its own (clockmost-infra `projects/openbao/admin/meru-shikigami-bootstrap.sh`).
 
+A new template repo (`Meru/nuwa-<name>`) needs the `shikigami` bot as a collaborator with Read, and Gitea's
+"template repository" box ticked. Without Read, Gitea answers 404 to `/generate` - the same answer as for a repo that
+doesn't exist - and the onboarding stops with "no template repo ..., or the bot may not have Read access".
+
 Temporal is reached with the pod's in-cluster certificate (mTLS) plus a 10-minute Authentik token that is swapped
 before it runs out. Settings are `SHIKIGAMI_*` environment variables (`src/shikigami/config.py`).
 

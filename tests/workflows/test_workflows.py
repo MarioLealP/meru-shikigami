@@ -70,7 +70,7 @@ DSN = "https://0123456789abcdef0123456789abcdef@glitchtip.clockmost.com/7"
 
 def onboard_activities(log: list[str], deploy: str, first_build: str | None):
     @activity.defn(name="ensure_glitchtip")
-    async def ensure_glitchtip(app: str) -> str | None:
+    async def ensure_glitchtip(app: str, template: str | None = None) -> str | None:
         log.append(f"ensure_glitchtip {app}")
         return DSN
 
