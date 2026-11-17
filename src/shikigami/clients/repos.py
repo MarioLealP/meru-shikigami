@@ -279,10 +279,45 @@ def _with_prod_files(patterns: str) -> str:
     return ";".join(kept if PROD_FILES in kept else [*kept, PROD_FILES])
 
 
-async def protect_main(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str) -> str:
-    """Branch protection on main: pushes as before (CI's digest commits), force push off, prod's files protected.
+# Every CI job of the app's workflow `ci` must have passed before a PR merges ("ci / build (pull_request)", ...).
+REQUIRED_CHECKS = "ci / *"
 
-    Force push off keeps the history append-only; PROD_FILES leaves prod to an admin's override (Mario).
+
+def _rule(pushers: list[str]) -> dict[str, object]:
+    """What main's rule must hold.
+
+    No force push, direct pushes only by `pushers` (the release bot's digest commits), PRs merge only with every `ci`
+    job green. Prod's files are added separately (an existing rule keeps its other patterns).
+    """
+    return {
+        "enable_push": True,
+        "enable_push_whitelist": True,
+        "push_whitelist_usernames": sorted(pushers),
+        "enable_force_push": False,
+        "enable_status_check": True,
+        "status_check_contexts": [REQUIRED_CHECKS],
+    }
+
+
+_SAID = {
+    "enable_push": "pushes allowed",
+    "enable_push_whitelist": "pushes allowlisted",
+    "push_whitelist_usernames": "push allowlist set",
+    "enable_force_push": "force push off",
+    "enable_status_check": "checks required",
+    "status_check_contexts": "required checks set",
+    "protected_file_patterns": "prod files protected",
+}
+
+
+async def protect_main(
+    http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str, pushers: list[str]
+) -> str:
+    """Branch protection on main: only `pushers` push directly, everyone else goes through a PR whose CI passed.
+
+    `pushers` is the release bot (meru-release commits the digest) - empty while it doesn't exist yet, and then nobody
+    pushes main at all. Force push off keeps the history append-only; PROD_FILES leaves prod to an admin's override
+    (Mario). An existing rule is brought to exactly that - a wider allowlist is narrowed, not merged.
 
     Says what it did: added, an existing rule tightened, or kept.
     """
@@ -290,36 +325,25 @@ async def protect_main(http: httpx2.AsyncClient, gitea_url: str, token: str, org
     response = await http.get(base, headers=headers)
     response.raise_for_status()
     rule = next((r for r in response.json() if r.get("rule_name") == "main"), None)
+    wanted = _rule(pushers)
     if rule is None:
         created = await http.post(
-            base,
-            headers=headers,
-            json={
-                "rule_name": "main",
-                "enable_push": True,
-                "enable_force_push": False,
-                "protected_file_patterns": PROD_FILES,
-            },
+            base, headers=headers, json={"rule_name": "main", **wanted, "protected_file_patterns": PROD_FILES}
         )
         created.raise_for_status()
         return "added"
     change: dict[str, object] = {}
-    if rule.get("enable_force_push"):
-        change["enable_force_push"] = False
+    for key, value in wanted.items():
+        current = rule.get(key)
+        if (sorted(current or []) if isinstance(value, list) else current) != value:
+            change[key] = value
     patterns = rule.get("protected_file_patterns") or ""
     if _with_prod_files(patterns) != patterns:
         change["protected_file_patterns"] = _with_prod_files(patterns)
     if not change:
         return "kept"
     (await http.patch(f"{base}/main", headers=headers, json=change)).raise_for_status()
-    return (
-        "tightened ("
-        + ", ".join(
-            {"enable_force_push": "force push off", "protected_file_patterns": "prod files protected"}[k]
-            for k in change
-        )
-        + ")"
-    )
+    return "tightened (" + ", ".join(_SAID[k] for k in change) + ")"
 
 
 async def add_writer(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str, user: str) -> bool:
