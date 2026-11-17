@@ -1,0 +1,21 @@
+# Xolotl's fence: where its Application may read from and deploy to - its own repo plus the
+# Nüwa and Sindri charts, into exactly its two namespaces, which it may also create.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: meru-xolotl
+  namespace: argocd
+spec:
+  description: "Xolotl - Meru's merger - checks and merges Shikigami's trust PRs"
+  sourceRepos:
+    - https://git.clockmost.com/Meru/xolotl.git
+    - https://git.clockmost.com/Meru/nuwa.git
+    - https://git.clockmost.com/Meru/sindri.git
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: xolotl
+    - server: https://kubernetes.default.svc
+      namespace: xolotl-build
+  clusterResourceWhitelist:
+    - { group: "", kind: Namespace, name: xolotl }
+    - { group: "", kind: Namespace, name: xolotl-build }

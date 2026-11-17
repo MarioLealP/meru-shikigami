@@ -23,6 +23,20 @@ def test_the_fence_is_echos_hand_written_one_for_another_app():
     assert made == real
 
 
+# Golden files: byte-for-byte the same as Meru/xolotl's tests/fixtures/meru-xolotl-fence*.yaml, which its expected.py is
+# tested against (cm-8sm2: the two drifted once, #57 here and #27 there). Changing fence() fails here; copy the new
+# text into both repos' fixtures, so Xolotl's test then fails until its expected.py follows.
+XOLOTL_DESCRIPTION = "Meru's merger - checks and merges Shikigami's trust PRs"
+
+
+@pytest.mark.parametrize(
+    ("golden", "environments"),
+    [("meru-xolotl-fence.yaml", []), ("meru-xolotl-fence-environments.yaml", ["uat", "prod"])],
+)
+def test_the_fence_is_the_golden_text_xolotl_expects(golden: str, environments: list[str]):
+    assert trust.fence("xolotl", XOLOTL_DESCRIPTION, environments) == (FIXTURES / golden).read_text()
+
+
 def test_a_description_with_yaml_in_it_stays_one_string():
     made = yaml.safe_load(trust.fence("golem", 'it says: "hi" # not a comment'))
     assert made["spec"]["description"] == 'Golem - it says: "hi" # not a comment'
