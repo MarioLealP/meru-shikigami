@@ -28,6 +28,14 @@ def _signed(secret: SecretStr, body: bytes, signature: str | None) -> bool:
     return hmac.compare_digest(expected, signature or "")
 
 
+async def _backlog_or_503(client: Client, settings: Settings) -> int:
+    """The backlog; a failed Temporal call is a failed metric for KEDA (it keeps its replicas), not a crash."""
+    try:
+        return await backlog(client, settings)
+    except RPCError as e:
+        raise HTTPException(503, "Temporal not reachable") from e
+
+
 def make_app(settings: Settings, client: Client, http: httpx2.AsyncClient) -> FastAPI:
     """The FastAPI app: probes, /ping, /validate, /backlog and /builds/<app>/waiting."""
     app = FastAPI(title="Shikigami", docs_url=None, redoc_url=None, openapi_url=None)
@@ -78,9 +86,9 @@ def make_app(settings: Settings, client: Client, http: httpx2.AsyncClient) -> Fa
         except httpx2.HTTPError as e:
             raise HTTPException(502, f"can't read the requests repo: {type(e).__name__}") from e
 
-    @app.get("/backlog", status_code=200)
+    @app.get("/backlog", status_code=200, responses={503: {"description": "Temporal call failed"}})
     async def get_backlog() -> dict[str, int]:
-        return {"backlog": await backlog(client, settings)}
+        return {"backlog": await _backlog_or_503(client, settings)}
 
     app.include_router(builds_router(settings, http))
 

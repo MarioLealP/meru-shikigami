@@ -7,6 +7,7 @@ import httpx2
 import pytest
 from fastapi.testclient import TestClient
 from temporalio.client import Client
+from temporalio.service import RPCError, RPCStatusCode
 
 from shikigami.api.app import make_app
 from shikigami.config import Settings
@@ -95,3 +96,14 @@ def test_waiting_builds_says_502_when_gitea_fails(monkeypatch: pytest.MonkeyPatc
     down = httpx2.AsyncClient(transport=httpx2.MockTransport(lambda r: httpx2.Response(500)))
     web = TestClient(make_app(Settings(), cast(Client, None), down))
     assert web.get("/builds/echo/waiting").status_code == 502
+
+
+def test_backlog_says_503_when_temporal_cancels(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("SHIKIGAMI_GITEA_TOKEN", "tok")
+
+    async def describe(*args: object, **kwargs: object) -> None:
+        raise RPCError("operation was canceled", RPCStatusCode.CANCELLED, b"")
+
+    client = cast(Client, SimpleNamespace(workflow_service=SimpleNamespace(describe_task_queue=describe)))
+    web = TestClient(make_app(Settings(), client, cast(httpx2.AsyncClient, None)))
+    assert web.get("/backlog").status_code == 503
