@@ -5,7 +5,6 @@ import bcrypt
 import httpx2
 import pytest
 from temporalio import activity
-from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment, WorkflowEnvironment
 from temporalio.worker import Worker
@@ -14,6 +13,7 @@ from shikigami.activities import BuildActivities
 from shikigami.clients.openbao import KV, ConflictError
 from shikigami.core import build_creds as creds
 from shikigami.workflows.workflows import OnboardBuild
+from tests.temporal_server import start_time_skipping
 
 REGISTRY = "zot.clockmost.com"
 OTHER = "echo-builder:" + bcrypt.hashpw(b"echo-pw", bcrypt.gensalt(4)).decode()
@@ -61,7 +61,7 @@ async def fake_public_key(cosign: str, key: str, password: str) -> str:
 
 @pytest.fixture
 async def env():
-    async with await WorkflowEnvironment.start_time_skipping(data_converter=pydantic_data_converter) as env:
+    async with await start_time_skipping() as env:
         yield env
 
 

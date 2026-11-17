@@ -5,7 +5,6 @@ from datetime import UTC, datetime
 import pytest
 from temporalio import activity
 from temporalio.client import Client
-from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.exceptions import ApplicationError
 from temporalio.service import RPCError
 from temporalio.testing import WorkflowEnvironment
@@ -21,6 +20,7 @@ from shikigami.workflows.workflows import (
     RequestsSync,
     fingerprint,
 )
+from tests.temporal_server import start_time_skipping
 
 ECHO = App.model_validate(
     {
@@ -199,7 +199,7 @@ def activities(
 
 @pytest.fixture
 async def env():
-    async with await WorkflowEnvironment.start_time_skipping(data_converter=pydantic_data_converter) as env:
+    async with await start_time_skipping() as env:
         yield env
 
 
