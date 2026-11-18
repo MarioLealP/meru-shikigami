@@ -140,7 +140,7 @@
             }
           ],
           "default": null,
-          "description": "Written by Xolotl with removedBy; the retention counts from here.",
+          "description": "Legacy, Xolotl's stamp: only the fallback start of the retention clock Shikigami stamps.",
           "title": "Removedat"
         }
       },

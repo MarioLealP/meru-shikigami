@@ -156,6 +156,14 @@ class AppWorkflow:
             workflow.logger.info("app %s: retire - Thoth %s", app, said)
 
         await mark("decommissioning")
+        if workflow.patched("retire-clock"):  # the retention clock starts here, once, before any step can stop the pass
+            clock = await workflow.execute_activity_method(
+                Activities.retire_stamp_clock,
+                args=[app, removed_at],
+                start_to_close_timeout=TIMEOUT,
+                retry_policy=RETRY,
+            )
+            workflow.logger.info("app %s: retire - retention clock %s", app, clock or "(no namespace)")
         stop = await step(Activities.retire_stop, with_envs=True)
         workflow.logger.info("app %s: retire - stop %s", app, stop)
         if not (stop.startswith("kept") or stop == "written"):  # a PR (cm-konk): Xolotl's merge pings the next pass

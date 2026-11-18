@@ -48,7 +48,9 @@ class Metadata(_Model):
         default=None, alias="removedBy", description="Written by Xolotl when a removal is approved."
     )
     removed_at: datetime | None = Field(
-        default=None, alias="removedAt", description="Written by Xolotl with removedBy; the retention counts from here."
+        default=None,
+        alias="removedAt",
+        description="Legacy, Xolotl's stamp: only the fallback start of the retention clock Shikigami stamps.",
     )
 
 

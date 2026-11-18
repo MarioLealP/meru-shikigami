@@ -157,6 +157,11 @@ def retire_activities(log: list[str], retire: dict[str, object] | None):
         log.append(f"retire_mark {app} {status}")
         return status
 
+    @activity.defn(name="retire_stamp_clock")
+    async def retire_stamp_clock(app: str, removed_at: datetime | None = None) -> str | None:
+        log.append(f"retire_stamp_clock {app} {removed_at.isoformat() if removed_at else None}")
+        return "stamped"
+
     @activity.defn(name="retire_mark_namespaces")
     async def retire_mark_namespaces(
         app: str, removed_at: datetime | None, environments: list[str] | None = None
@@ -175,7 +180,14 @@ def retire_activities(log: list[str], retire: dict[str, object] | None):
         log.append(f"apply_theme {app} {theme}" + (f" envs={','.join(environments)}" if environments else ""))
         return [app]
 
-    return [*retire_steps, retire_mark, retire_mark_namespaces, restore_unmark_namespaces, apply_theme]
+    return [
+        *retire_steps,
+        retire_mark,
+        retire_stamp_clock,
+        retire_mark_namespaces,
+        restore_unmark_namespaces,
+        apply_theme,
+    ]
 
 
 def activities(
@@ -343,6 +355,7 @@ async def test_a_removed_request_retires_in_order_and_onboards_nothing(env: Work
     _, done = await run_sync(env.client, snapshot, {"golem": ExistingApp(key="golem", status="active")}, log)
     assert [line for line in log if line.startswith(("ensure_", "retire_", "revoke_"))] == [
         "retire_mark golem decommissioning",  # Thoth hears it first (D85)
+        "retire_stamp_clock golem 2026-11-03T12:31:18+00:00",  # the retention clock starts, before anything can stop us
         "retire_stop golem",  # stop first ...
         "retire_wait_stopped golem",  # ... confirmed by Argo before the Application can go
         "retire_park_marker golem",
@@ -396,6 +409,23 @@ async def test_a_retire_pr_ends_the_pass_until_xolotl_merges_it(env: WorkflowEnv
     log: list[str] = []
     await run_sync(env.client, snapshot, {"golem": ExistingApp(key="golem", status="active")}, log, retire=retire)
     assert [line for line in log if line.startswith("retire_")][-1] == last  # nothing after it this pass
+    assert "retire_stamp_clock golem None" in log  # but the clock is already running
+    assert "retire_mark golem retained" not in log
+
+
+async def test_a_new_style_request_without_removed_at_retires_to_retained(env: WorkflowEnvironment):
+    golem = ECHO.model_copy(
+        update={
+            "metadata": ECHO.metadata.model_copy(update={"name": "golem"}),
+            "spec": ECHO.spec.model_copy(update={"removed": True}),
+        }
+    )
+    snapshot = RequestsSnapshot(commit="c1", apps={"golem": golem}, databases={}, problems=[])
+    log: list[str] = []
+    await run_sync(env.client, snapshot, {"golem": ExistingApp(key="golem", status="active")}, log)
+    steps = [line for line in log if line.startswith("retire_")]
+    assert steps[:2] == ["retire_mark golem decommissioning", "retire_stamp_clock golem None"]
+    assert steps[-2:] == ["retire_mark_namespaces golem None", "retire_mark golem retained"]
 
 
 async def test_a_retained_app_whose_request_is_back_is_marked_planned_then_onboarded(env: WorkflowEnvironment):
