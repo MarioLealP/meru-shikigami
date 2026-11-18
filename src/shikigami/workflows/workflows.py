@@ -286,10 +286,14 @@ class RequestsSync:
                 actions: list[AppAction] = []
             else:
                 existing = await workflow.execute_activity_method(
-                    Activities.read_existing_apps, start_to_close_timeout=TIMEOUT, retry_policy=RETRY
+                    Activities.read_existing_apps,
+                    args=[sorted(snapshot.apps)],
+                    start_to_close_timeout=TIMEOUT,
+                    retry_policy=RETRY,
                 )
                 actions = plan(snapshot.apps, existing)
-                # Planned against what Thoth had; then declare the whole request picture before the apps' steps run.
+                # Planned against what exists; then declare the whole request picture to Thoth before the apps' steps
+                # run (the register step stays until Thoth's own card - rework 6 only moved the plan path off it).
                 summary = await workflow.execute_activity_method(
                     Activities.declare_apps, snapshot, start_to_close_timeout=TIMEOUT, retry_policy=RETRY
                 )

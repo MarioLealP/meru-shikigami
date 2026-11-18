@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+- The plan diff reads what exists from Gitea and Argo CD, not Thoth (rework 6 prep): an app exists when its repo
+  exists or its `app-<name>` Application does (`get` per name - the rbac allows no list), and its status comes from
+  the repo's own deploy files (D85's stop line, and whether the marker is parked): active, decommissioning or
+  retained - plan()'s vocabulary unchanged. `template` is unknown from those sources, so a request changing its
+  template re-checks instead of `update` (same steps either way; only the dry-run line differed). The `register in
+  Thoth` and retire-step calls stay until Thoth's own card.
+
 ### Removed
 - The signing key + build exception in Meru/kyverno (Mario 2026-11-15 dropped Kyverno): onboarding proposes the fence
   and the push rule only, retiring removes only those, and the marker no longer waits for Meru/kyverno to trust the

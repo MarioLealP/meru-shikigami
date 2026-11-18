@@ -25,7 +25,8 @@ class Settings(BaseSettings):
     temporal_client_id: str = "temporal"
     thoth_client_id: str = "thoth"
 
-    # Where requests come from (D35) and what exists (Thoth).
+    # Where requests come from (D35) and where app repos live (D76). What exists is read from Gitea + Argo CD now
+    # (rework 6); `thoth_url` serves only the register + retire-step calls that stay until Thoth's own card.
     gitea_url: str = "https://git.clockmost.com"
     requests_repo: str = "Meru/requests"
     apps_org: str = "Meru"  # where app repos and their templates live (D76)

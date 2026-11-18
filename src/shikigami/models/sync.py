@@ -23,13 +23,18 @@ class RequestsSnapshot(BaseModel):
 
 
 class ExistingApp(BaseModel):
-    """A Meru app Thoth knows (item type `app`, written by Shikigami)."""
+    """A Meru app that exists: its Gitea repo or its Argo CD Application (`read_existing_apps`).
+
+    `status` keeps plan()'s vocabulary: `active` (in service or still onboarding), `decommissioning`/`retained`
+    (its retire pass started/finished - a request back gets a restore, D106), `retired` (gone for good). A name
+    absent from the reading is not here at all.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     key: str
     status: str
-    template: str | None = None
+    template: str | None = None  # never known from Gitea/Argo (Thoth remembered it): a template change re-checks
 
 
 class AppAction(BaseModel):
