@@ -347,13 +347,16 @@ async def protect_main(
 
 
 async def add_writer(http: httpx2.AsyncClient, gitea_url: str, token: str, org: str, repo: str, user: str) -> bool:
-    """The user as a Write collaborator; False if no such user exists (yet) - nothing is added then."""
-    if (await http.get(f"{gitea_url}/api/v1/users/{user}")).status_code == 404:
+    """The user as a Write collaborator; False if no such user exists (yet) - nothing is added then.
+
+    Asked with the token: an anonymous lookup of a limited-visibility user (meru-release) is a 404 too, which once
+    left every app onboarded after 2026-11-16 without a release pusher (felt-hermes, felt-llm: digest commits 403).
+    """
+    headers = {"Authorization": f"token {token}"}
+    if (await http.get(f"{gitea_url}/api/v1/users/{user}", headers=headers)).status_code == 404:
         return False
     response = await http.put(
-        f"{gitea_url}/api/v1/repos/{org}/{repo}/collaborators/{user}",
-        headers={"Authorization": f"token {token}"},
-        json={"permission": "write"},
+        f"{gitea_url}/api/v1/repos/{org}/{repo}/collaborators/{user}", headers=headers, json={"permission": "write"}
     )
     response.raise_for_status()
     return True
