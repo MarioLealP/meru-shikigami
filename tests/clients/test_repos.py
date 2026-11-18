@@ -106,7 +106,9 @@ def lock_out_gitea(admin: bool | None, rules: list[dict], users: set[str], seen:
         if path.endswith("/branch_protections") and request.method == "GET":
             return httpx2.Response(200, json=rules)
         if path.startswith("/api/v1/users/"):
-            return httpx2.Response(200 if path.rsplit("/", 1)[1] in users else 404, json={})
+            # Like a limited-visibility user (meru-release): anonymous lookups get a 404 even when it exists.
+            seen_by = "Authorization" in request.headers
+            return httpx2.Response(200 if seen_by and path.rsplit("/", 1)[1] in users else 404, json={})
         return httpx2.Response(204 if request.method in ("PUT", "DELETE") else 201, json={})
 
     return httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
