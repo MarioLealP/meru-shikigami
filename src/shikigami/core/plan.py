@@ -18,13 +18,14 @@ def plan(apps: dict[str, App], existing: dict[str, ExistingApp]) -> list[AppActi
         if spec.removed:
             kind, reason = "retire", "removed by its request (D83)"
         elif current is None or current.status == "retired":
-            kind, reason = "register", "requested, not in Thoth"
+            kind, reason = "register", "requested, not deployed"
         elif current.status in ("decommissioning", "retained"):
             kind, reason = "restore", f"{current.status}, its request is back (D106)"
-        elif current.template != spec.template:
+        elif current.template is not None and current.template != spec.template:
+            # the template is unknown from Gitea/Argo (Thoth remembered it): None re-checks, never updates
             kind, reason = "update", f"template {current.template!r} -> {spec.template!r}"
         else:
-            kind, reason = "check", "matches Thoth, steps re-checked"
+            kind, reason = "check", "matches what exists, steps re-checked"
         actions.append(
             AppAction(
                 app=name,
@@ -42,5 +43,5 @@ def plan(apps: dict[str, App], existing: dict[str, ExistingApp]) -> list[AppActi
         )
     for name in sorted(set(existing) - set(apps)):
         if existing[name].status != "retired":
-            actions.append(AppAction(app=name, kind="retire", reasons=["in Thoth, no request"]))
+            actions.append(AppAction(app=name, kind="retire", reasons=["exists, no request"]))
     return actions

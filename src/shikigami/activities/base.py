@@ -24,7 +24,7 @@ class ActivityBase(BaseModel):
     settings: Settings
     http: httpx2.AsyncClient
     thoth_tokens: TokenSource
-    kube: httpx2.AsyncClient | None = None  # trusts the cluster's CA; only the retire pass reads the API
+    kube: httpx2.AsyncClient | None = None  # trusts the cluster's CA; read by the retire pass + existence check
     now: Callable[[], datetime] = lambda: datetime.now(UTC)  # the retention clock's "now"; tests inject theirs
 
     async def _public(self, app: str, path: str) -> str | None:

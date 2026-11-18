@@ -49,6 +49,11 @@ async def test_a_server_error_is_retried():
         await ActivityEnvironment().run(activities(503).declare_apps, SNAPSHOT)
 
 
+async def test_the_existence_check_needs_the_kubernetes_client():
+    with pytest.raises(ApplicationError, match="Kubernetes"):
+        await ActivityEnvironment().run(activities(200).read_existing_apps, ["echo"])
+
+
 @pytest.mark.parametrize("status", [403, 404, 422])
 async def test_repo_refusals_are_not_retried(status: int):
     with pytest.raises(ApplicationError) as raised:

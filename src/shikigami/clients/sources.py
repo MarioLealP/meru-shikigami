@@ -1,18 +1,25 @@
-"""Reading the two sides Shikigami compares: the requests (Meru/requests, D35) and what exists (Thoth)."""
+"""Reading the two sides Shikigami compares: the requests (Meru/requests, D35) and what exists.
+
+What exists is no longer Thoth (rework 6): it is the app's Gitea repo and its Argo CD Application - see
+`read_existing_apps`. Thoth still hears the request picture (`declare_apps`) and the retire steps
+(`mark_retire_step`) until its own card retires those.
+"""
 
 import asyncio
 import io
 import tarfile
 import tempfile
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 
 import httpx2
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, TypeAdapter
+from pydantic import BaseModel, ConfigDict, StringConstraints
 
+from shikigami.clients import argo, repos
 from shikigami.clients.incoming import Incoming
+from shikigami.core import retire
 from shikigami.core.validate import load
 from shikigami.models.sync import ExistingApp, RequestsSnapshot
 
@@ -23,17 +30,6 @@ class _Commit(Incoming):
 
 class _Branch(Incoming):
     commit: _Commit
-
-
-class _Item(Incoming):
-    """A Thoth item, as /v1/items lists it."""
-
-    key: str
-    status: str
-    attributes: dict[str, object] = Field(default_factory=dict)
-
-
-_ITEMS = TypeAdapter(list[_Item])
 
 
 def _unpack(archive: bytes, into: Path) -> Path:
@@ -109,19 +105,46 @@ async def check_proposal(
     return Verdict(commit=commit, problems=problems)
 
 
-async def read_existing_apps(http: httpx2.AsyncClient, thoth_url: str, token: str) -> dict[str, ExistingApp]:
-    """Every app item Thoth holds, by key."""
-    response = await http.get(
-        f"{thoth_url}/v1/items", params={"type": "app", "limit": 1000}, headers={"Authorization": f"Bearer {token}"}
-    )
-    response.raise_for_status()
-    apps = {}
-    for item in _ITEMS.validate_json(response.content):
-        template = item.attributes.get("template")
-        apps[item.key] = ExistingApp(
-            key=item.key, status=item.status, template=template if isinstance(template, str) else None
-        )
-    return apps
+async def read_existing_apps(
+    http: httpx2.AsyncClient,
+    kube: httpx2.AsyncClient,
+    gitea_url: str,
+    org: str,
+    kubernetes_url: str,
+    kube_token_file: Path,
+    argocd_namespace: str,
+    names: Iterable[str],
+) -> dict[str, ExistingApp]:
+    """What exists for each requested name - its Gitea repo and its Argo CD Application, never Thoth (rework 6).
+
+    The repo says the app was made; the Application (`app-<name>`, one per repo with a marker, Meru/meru's
+    ApplicationSet) says it is deployed. The status keeps plan()'s vocabulary, read from the repo's own deploy
+    files: D85's stop writes one `enabled: false # retired` line into deploy/values.yaml, and parking the marker
+    takes deploy/meru.yaml away. So a stopped app with its marker still up is `decommissioning`, one without is
+    `retained` (retired, kept until Charon purges), and anything else is `active` (in service or still onboarding).
+    A name with neither repo nor Application is absent from the answer: plan() registers those from scratch.
+
+    Only reads, in parallel per name: `get applications` in argocd (shikigami-reads-apps allows get, no list) and
+    anonymous Gitea - the way Argo reads the repos (Meru/meru deploys public repos only), so a repo the restricted
+    bot can't see (D89) still counts. `template` stays unknown: neither source records which template a repo came
+    from (Thoth remembered what the last sync declared).
+    """
+
+    async def one(name: str) -> ExistingApp | None:
+        deployed = await argo.application(kube, kubernetes_url, kube_token_file, argocd_namespace, f"app-{name}")
+        repo = await repos.exists(http, gitea_url, org, name)
+        if deployed is None and not repo:
+            return None
+        values = await repos.public_file(http, gitea_url, org, name, "deploy/values.yaml") if repo else None
+        if values is not None and retire.STOPPED.search(values):
+            marker = await repos.public_file(http, gitea_url, org, name, "deploy/meru.yaml")
+            status = "decommissioning" if marker is not None else "retained"
+        else:
+            status = "active"
+        return ExistingApp(key=name, status=status)
+
+    found = await asyncio.gather(*(one(name) for name in sorted(names)))
+    return {app.key: app for app in found if app is not None}
 
 
 async def declare_apps(http: httpx2.AsyncClient, thoth_url: str, token: str, snapshot: RequestsSnapshot) -> dict:

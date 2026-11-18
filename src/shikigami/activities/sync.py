@@ -22,9 +22,21 @@ class SyncActivities(ActivityBase):
         )
 
     @activity.defn
-    async def read_existing_apps(self) -> dict[str, ExistingApp]:
-        """Every app Thoth knows."""
-        return await read_existing_apps(self.http, self.settings.thoth_url, await self.thoth_tokens.get())
+    async def read_existing_apps(self, names: list[str]) -> dict[str, ExistingApp]:
+        """What exists for these names: each one's Gitea repo and Argo CD Application (Thoth is not consulted)."""
+        s = self.settings
+        if self.kube is None:
+            raise ApplicationError("no Kubernetes API client (kubernetesApi off?)", non_retryable=True)
+        return await read_existing_apps(
+            self.http,
+            self.kube,
+            s.gitea_url,
+            s.apps_org,
+            s.kubernetes_url,
+            s.kubernetes_dir / "token",
+            s.argocd_namespace,
+            names,
+        )
 
     @activity.defn
     async def declare_apps(self, snapshot: RequestsSnapshot) -> dict:

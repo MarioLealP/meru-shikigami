@@ -7,8 +7,8 @@ requests and calling APIs. It never touches the cluster itself: Argo CD applies 
 Secrets Operator fills secrets from OpenBao.
 
 This repo holds the **request format v1** and its validator, and the **worker**: Temporal workflows that compare the
-requests with what exists in Thoth (Meru's CMDB) and work out each app's step. For now it is a **dry run** - every
-step only logs what it would do.
+requests with what exists (the app's Gitea repo and its Argo CD Application) and work out each app's step. For now it
+is a **dry run** - every step only logs what it would do.
 
 ## The request format
 
@@ -52,7 +52,7 @@ to one of them - and KEDA adds replicas when tasks queue up.
 - `POST /ping` - a Gitea webhook on Meru/requests: "go look". Starts `requests-sync`, or tells the running one to
   make one more pass; the body is never trusted, only its signature checked.
 - `requests-sync` - reads `main` of Meru/requests, validates it with the same library as the gate (and does nothing
-  if anything is wrong), asks Thoth which apps exist, and starts one child workflow per app step (register,
+  if anything is wrong), asks Gitea and Argo CD which apps exist, and starts one child workflow per app step (register,
   update, retire), side by side. A nightly schedule runs it too, to catch a missed ping.
 - `GET /backlog` - tasks waiting on Shikigami's queue, `{"backlog": n}`; KEDA scales on it.
 - `GET /heartbeat`, `GET /ready` - alive; connected to Temporal.

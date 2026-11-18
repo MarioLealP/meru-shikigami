@@ -44,7 +44,7 @@ def sync_activities(
         return snapshot
 
     @activity.defn(name="read_existing_apps")
-    async def read_existing_apps() -> dict[str, ExistingApp]:
+    async def read_existing_apps(names: list[str]) -> dict[str, ExistingApp]:
         log.append("read_existing_apps")
         return existing
 
@@ -254,7 +254,7 @@ async def test_requests_with_problems_change_nothing(env: WorkflowEnvironment):
     assert done == []
 
 
-async def test_declares_after_planning_against_what_thoth_had(env: WorkflowEnvironment):
+async def test_declares_after_planning_against_what_exists(env: WorkflowEnvironment):
     snapshot = RequestsSnapshot(commit="c1", apps={"echo": ECHO}, databases={}, problems=[])
     log: list[str] = []
     result, _ = await run_sync(env.client, snapshot, {}, log)

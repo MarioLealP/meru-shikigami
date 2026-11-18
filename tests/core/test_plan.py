@@ -60,6 +60,12 @@ def test_changed_template_is_an_update():
     assert "nuwa/upstream-like" in action.reasons[0]
 
 
+def test_an_unknown_template_is_a_check_not_an_update():
+    # Gitea and Argo record no template (Thoth remembered it): a reading without one can't say "changed"
+    (action,) = plan({"echo": app("echo", "nuwa/go")}, {"echo": existing("echo", template=None)})
+    assert action.kind == "check"
+
+
 def test_app_without_request_is_retired_once():
     actions = plan({}, {"old": existing("old"), "gone": existing("gone", status="retired")})
     assert [(a.app, a.kind) for a in actions] == [("old", "retire")]
