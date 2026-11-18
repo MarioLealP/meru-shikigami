@@ -1,6 +1,7 @@
 """What the activity groups share: their dependencies, and opening a PR once in a repo Shikigami may only read."""
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
 
 import httpx2
 from pydantic import BaseModel, ConfigDict
@@ -24,6 +25,7 @@ class ActivityBase(BaseModel):
     http: httpx2.AsyncClient
     thoth_tokens: TokenSource
     kube: httpx2.AsyncClient | None = None  # trusts the cluster's CA; only the retire pass reads the API
+    now: Callable[[], datetime] = lambda: datetime.now(UTC)  # the retention clock's "now"; tests inject theirs
 
     async def _public(self, app: str, path: str) -> str | None:
         return await public_file(self.http, self.settings.gitea_url, self.settings.apps_org, app, path)

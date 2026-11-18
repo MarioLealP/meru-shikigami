@@ -13,7 +13,7 @@ from temporalio.exceptions import ApplicationError
 from shikigami.activities.base import ActivityBase
 from shikigami.activities.texts import PARK, STOP, retire_title
 from shikigami.clients.argo import application, not_stopped
-from shikigami.clients.namespaces import THEME, set_annotation, set_removed_at, stamp
+from shikigami.clients.namespaces import REMOVED_AT, THEME, get_annotation, set_annotation, set_removed_at, stamp
 from shikigami.clients.proposals import Edit
 from shikigami.clients.repos import archive, change, commit_files, delete_runners, head, is_admin, read_file
 from shikigami.clients.sources import mark_retire_step
@@ -184,20 +184,47 @@ class RetireActivities(ActivityBase):
             if await set_removed_at(self.kube, s.kubernetes_url, token, ns, value)
         ]
 
+    async def _ensure_clock(self, app: str, removed_at: datetime | None) -> str | None:
+        """The retention clock: `<app>`'s removed-at annotation, stamped here if it isn't there yet.
+
+        The value is the request's removedAt when it has one (a legacy request Xolotl stamped), else now. Never
+        overwrites: a pass that stops and resumes must not move the clock. None when `<app>` doesn't exist (nothing was
+        deployed, nothing for Charon to purge).
+        """
+        s = self.settings
+        if self.kube is None:
+            raise ApplicationError("no Kubernetes API client (kubernetesApi off?)", non_retryable=True)
+        token = s.kubernetes_dir / "token"
+        exists, current = await get_annotation(self.kube, s.kubernetes_url, token, app, REMOVED_AT)
+        if not exists:
+            activity.logger.info("%s: no namespace - no retention clock to stamp", app)
+            return None
+        if current:
+            return current
+        value = stamp(removed_at or self.now())
+        if not await set_removed_at(self.kube, s.kubernetes_url, token, app, value):
+            return None
+        return value
+
+    @activity.defn
+    async def retire_stamp_clock(self, app: str, removed_at: datetime | None = None) -> str | None:
+        """Start of the retire pass: stamp the clock on `<app>` once; returns it (None: no namespace)."""
+        return await self._ensure_clock(app, removed_at)
+
     @activity.defn
     async def retire_mark_namespaces(
         self, app: str, removed_at: datetime | None, environments: list[str] | None = None
     ) -> list[str]:
-        """Charon step 1 (D107): put the request's removedAt on the app's namespaces.
+        """Charon step 1 (D107): copy `<app>`'s clock onto `<app>-build` and each `<app>-<env>`.
 
-        Charon deletes only marked ones, after its own 30 days. Last before Thoth hears retained: a marked namespace is
-        a fully retired app's.
+        The app namespace's annotation is the single authority; `removed_at` (the request's, possibly None) is only
+        the fallback for a pass that never stamped it (one already running when the stamp step was added). Charon
+        deletes only marked namespaces, after its own 30 days. Last before Thoth hears retained.
         """
-        if removed_at is None:
-            raise ApplicationError(
-                f"{app}'s request has no removedAt - Xolotl stamps it on the removal merge", non_retryable=True
-            )
-        return await self._set_removed_at(app, stamp(removed_at), environments or [])
+        clock = await self._ensure_clock(app, removed_at)
+        if clock is None:
+            return []
+        return await self._set_removed_at(app, clock, environments or [])
 
     @activity.defn
     async def restore_unmark_namespaces(self, app: str, environments: list[str] | None = None) -> list[str]:

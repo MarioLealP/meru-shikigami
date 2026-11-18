@@ -882,16 +882,20 @@ async def test_with_no_build_yet_the_first_one_is_started_and_watched():
     assert "POST /actions/workflows/ci.yaml/dispatches" in calls
 
 
-def marking(tmp_path: Path, namespaces: dict[str, dict[str, str]], refuse: int | None = None):
+def marking(
+    tmp_path: Path, namespaces: dict[str, dict[str, str]], refuse: int | None = None, now: datetime | None = None
+):
     """Activities whose cluster holds `namespaces` (name -> annotations); merge patches land in them."""
 
     def kubernetes(request: httpx2.Request) -> httpx2.Response:
         assert request.headers["authorization"] == "Bearer kube-token"
-        assert request.method == "PATCH"
-        assert request.headers["content-type"] == "application/merge-patch+json"
         name = request.url.path.removeprefix("/api/v1/namespaces/")
         if name not in namespaces:
             return httpx2.Response(404, json={})
+        if request.method == "GET":
+            return httpx2.Response(200, json={"metadata": {"name": name, "annotations": namespaces[name]}})
+        assert request.method == "PATCH"
+        assert request.headers["content-type"] == "application/merge-patch+json"
         if refuse:
             return httpx2.Response(refuse, json={"message": "denied"})
         for key, value in json.loads(request.content)["metadata"]["annotations"].items():
@@ -905,11 +909,12 @@ def marking(tmp_path: Path, namespaces: dict[str, dict[str, str]], refuse: int |
     settings = Settings.model_construct(kubernetes_url="https://kube.test", kubernetes_dir=tmp_path)
     kube, http = httpx2.AsyncClient(transport=httpx2.MockTransport(kubernetes)), httpx2.AsyncClient()
     tokens = TokenSource(http=http, token_url="https://auth.test/token/", client_id="thoth", token_file=TOKEN_FILE)
-    return Activities(settings=settings, http=http, thoth_tokens=tokens, kube=kube)
+    clock = {"now": lambda: now} if now else {}
+    return Activities(settings=settings, http=http, thoth_tokens=tokens, kube=kube, **clock)
 
 
-async def test_retire_marks_both_namespaces_with_the_requests_removed_at(tmp_path: Path):
-    cluster: dict[str, dict[str, str]] = {"golem": {}, "golem-build": {"keep": "me"}}
+async def test_retire_marks_both_namespaces_with_a_legacy_requests_removed_at(tmp_path: Path):
+    cluster: dict[str, dict[str, str]] = {"golem": {}, "golem-build": {"keep": "me"}}  # a pass that never stamped
     activities = marking(tmp_path, cluster)
     removed_at = datetime(2026, 11, 3, 13, 31, 18, tzinfo=timezone(timedelta(hours=1)))
     marked = await ActivityEnvironment().run(activities.retire_mark_namespaces, "golem", removed_at)
@@ -936,11 +941,61 @@ async def test_a_missing_namespace_is_skipped_not_an_error(tmp_path: Path):
     assert await ActivityEnvironment().run(activities.retire_mark_namespaces, "golem", removed_at) == ["golem"]
 
 
-async def test_a_retire_without_removed_at_stops_for_good(tmp_path: Path):
-    activities = marking(tmp_path, {"golem": {}})
-    with pytest.raises(ApplicationError, match="no removedAt") as raised:
-        await ActivityEnvironment().run(activities.retire_mark_namespaces, "golem", None)
-    assert raised.value.non_retryable
+CLOCK = "meru.clockmost.com/removed-at"
+NOW = datetime(2026, 11, 20, 9, 30, 5, 123456, tzinfo=UTC)
+
+
+async def test_the_clock_is_stamped_on_the_app_namespace_from_the_legacy_request(tmp_path: Path):
+    cluster: dict[str, dict[str, str]] = {"golem": {}, "golem-build": {}}
+    activities = marking(tmp_path, cluster, now=NOW)
+    legacy = datetime(2026, 11, 3, 12, 31, 18, tzinfo=UTC)
+    assert await ActivityEnvironment().run(activities.retire_stamp_clock, "golem", legacy) == "2026-11-03T12:31:18Z"
+    assert cluster == {"golem": {CLOCK: "2026-11-03T12:31:18Z"}, "golem-build": {}}  # only the app's, until step 9
+
+
+async def test_without_a_removed_at_the_clock_is_now(tmp_path: Path):
+    cluster: dict[str, dict[str, str]] = {"golem": {}}
+    activities = marking(tmp_path, cluster, now=NOW)
+    assert await ActivityEnvironment().run(activities.retire_stamp_clock, "golem", None) == "2026-11-20T09:30:05Z"
+    assert cluster == {"golem": {CLOCK: "2026-11-20T09:30:05Z"}}
+
+
+async def test_a_later_pass_never_moves_the_clock(tmp_path: Path):
+    cluster: dict[str, dict[str, str]] = {"golem": {CLOCK: "2026-11-03T12:31:18Z"}, "golem-build": {}}
+    activities = marking(tmp_path, cluster, now=NOW)
+    other = datetime(2026, 12, 1, tzinfo=UTC)  # the file now says something else
+    assert await ActivityEnvironment().run(activities.retire_stamp_clock, "golem", other) == "2026-11-03T12:31:18Z"
+    assert await ActivityEnvironment().run(activities.retire_mark_namespaces, "golem", other) == [
+        "golem",
+        "golem-build",
+    ]
+    assert cluster == {"golem": {CLOCK: "2026-11-03T12:31:18Z"}, "golem-build": {CLOCK: "2026-11-03T12:31:18Z"}}
+
+
+async def test_a_missing_app_namespace_gets_no_stamp_and_no_error(tmp_path: Path):
+    cluster: dict[str, dict[str, str]] = {"golem-build": {}}  # nothing was ever deployed
+    activities = marking(tmp_path, cluster, now=NOW)
+    assert await ActivityEnvironment().run(activities.retire_stamp_clock, "golem", None) is None
+    assert await ActivityEnvironment().run(activities.retire_mark_namespaces, "golem", None) == []
+    assert cluster == {"golem-build": {}}
+
+
+async def test_step_9_copies_the_app_namespaces_clock_not_the_requests(tmp_path: Path):
+    cluster: dict[str, dict[str, str]] = {"golem": {CLOCK: "2026-11-03T12:31:18Z"}, "golem-build": {}, "golem-prod": {}}
+    activities = marking(tmp_path, cluster, now=NOW)
+    forged = datetime(2020, 1, 1, tzinfo=UTC)
+    await ActivityEnvironment().run(activities.retire_mark_namespaces, "golem", forged, ["prod"])
+    assert {n: a[CLOCK] for n, a in cluster.items()} == dict.fromkeys(cluster, "2026-11-03T12:31:18Z")
+
+
+async def test_a_restore_clears_the_clock_and_a_re_removal_starts_a_new_one(tmp_path: Path):
+    cluster: dict[str, dict[str, str]] = {"golem": {}, "golem-build": {}}
+    activities = marking(tmp_path, cluster, now=NOW)
+    await ActivityEnvironment().run(activities.retire_stamp_clock, "golem", None)
+    await ActivityEnvironment().run(activities.restore_unmark_namespaces, "golem")
+    assert cluster == {"golem": {}, "golem-build": {}}
+    later = marking(tmp_path, cluster, now=NOW + timedelta(days=9))
+    assert await ActivityEnvironment().run(later.retire_stamp_clock, "golem", None) == "2026-11-29T09:30:05Z"
 
 
 async def test_a_refused_mark_is_retried(tmp_path: Path):
@@ -1003,6 +1058,7 @@ def test_activity_names_are_the_ones_running_workflows_replay_against():
         "retire_trust",
         "retire_runner",
         "retire_archive",
+        "retire_stamp_clock",
         "retire_mark_namespaces",
         "restore_unmark_namespaces",
         "retire_mark",

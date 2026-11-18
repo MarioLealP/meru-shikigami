@@ -1,8 +1,8 @@
 """Shikigami's two annotations on an app's namespaces.
 
-- removed-at (Charon step 1, D107): the retire pass copies the request's removedAt (Xolotl's stamp) onto `<app>` and
-  `<app>-build`, and a restore (D106) takes it off. Charon deletes only namespaces that carry it, after its own 30-day
-  check - two keys.
+- removed-at (Charon step 1, D107): the retention clock. The retire pass stamps it ONCE on `<app>` (the request's
+  removedAt if a legacy request has one, else now), copies it from there onto `<app>-build` and each `<app>-<env>`,
+  and a restore (D106) takes it off. Charon deletes only namespaces that carry it, after its own 30-day check.
 - theme: every pass writes the request's theme; Rancher's sorter (Meru/meru platform/rancher.yaml) files the
   namespace into that theme's project.
 
@@ -42,6 +42,20 @@ async def set_annotation(
         return False
     response.raise_for_status()
     return True
+
+
+async def get_annotation(
+    http: httpx2.AsyncClient, api_url: str, token_file: Path, namespace: str, key: str
+) -> tuple[bool, str | None]:
+    """(namespace exists, the annotation's value or None)."""
+    response = await http.get(
+        f"{api_url}/api/v1/namespaces/{namespace}",
+        headers={"Authorization": f"Bearer {token_file.read_text().strip()}"},
+    )
+    if response.status_code == 404:
+        return False, None
+    response.raise_for_status()
+    return True, (response.json().get("metadata", {}).get("annotations") or {}).get(key)
 
 
 async def set_removed_at(

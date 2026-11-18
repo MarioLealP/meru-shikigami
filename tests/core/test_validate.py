@@ -142,7 +142,8 @@ def test_an_app_with_environments_and_a_database_each_is_valid(tmp_path: Path) -
 
 
 def test_a_removed_app_with_its_removal_recorded_is_valid(tmp_path: Path) -> None:
-    removed = ECHO.replace("  name: echo\n", "  name: echo\n  removedBy: mario\n  removedAt: 2026-10-31T21:00:00Z\n")
+    stamped = "  removedBy: mario\n  removedAt: 2026-10-31T21:00:00Z\n  approvedBy: mario\n"  # old format, still valid
+    removed = ECHO.replace("  name: echo\n", "  name: echo\n" + stamped)
     assert check(repo(tmp_path, GOOD | {"apps/echo.yaml": removed + "  removed: true\n"})) == []
 
 
